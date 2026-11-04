@@ -1,0 +1,12 @@
+# Development-policy reference; adjust ONLY before blinded final evaluation.
+reference_evaluator:
+  cooldown_s: 10.0
+  match_window_s: 5.0
+  event_onset_definition: loss_of_balance_start
+  false_alarm_denominator: duration_of_entirely_adl_clips
+  cross_dataset_blind: GMDCSA-24_v2.1
+research_targets_not_guarantees:
+  event_recall_min: 0.90
+  false_alarms_per_adl_hour_max: 0.1
+  median_delay_s_max: 2.0
+  live_720p_fps_min: 10

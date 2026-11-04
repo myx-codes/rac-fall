@@ -1,0 +1,18 @@
+# Related work matrix — verified starting references (2026-11-04)
+
+| Work | What it establishes | Limit / RACF implication |
+|---|---|---|
+| Eraso et al., *Dataset for human fall recognition in an uncontrolled environment* (2022) | CAUCAFall: 10 subjects; five simulated fall types, five ADLs; frame labels; varied home lighting, angles and occlusion | CAUCAFall's 'fall' label begins when subject is on the ground; **not directly the start of the loss of balance**. Manually annotate onset before event-delay benchmarking. https://pmc.ncbi.nlm.nih.gov/articles/PMC9508401/ |
+| Kępski, *UR Fall Detection Dataset* | 70 sequences: 30 falls and 40 ADL; RGB/depth and accelerometer | Small dataset; unequal camera conditions; treat as external development, not a large representative real-world test. https://fenix.ur.edu.pl/~mkepski/ds/uf.html |
+| Alam et al., *GMDCSA-24: A dataset for human fall detection in videos* (2024) | 160 videos: 81 fall, 79 ADL, 4 actors, three home environments; difficult ADLs (e.g. sleeping, push-ups) | Small number of actors and staged events; suitable for sealed external benchmark, **not proof of deployed reliability**. https://pmc.ncbi.nlm.nih.gov/articles/PMC11416611/ |
+| Xiao, Li & Liu, *Cross-Dataset Fall-Event Detection via Causal RGB–Pose Temporal Modeling and Alarm Verification* (2026-10-29) | YOLO pose + causal TCN + three-state/verification; historical false alarms 137.10 -> 53.32/h while recall 92.41% -> 75.95% | **Closest prior art.** Need novel, audited risk-conditioned policy; avoid the same claims and compare equally matched recall. Authors report limited 0.263 h negative exposure and offline alignment. https://doi.org/10.3390/info17111077 |
+| *A Lightweight Fall Detection Framework for Smart-City CCTV Using Distilled Pose and Interpretable Features* (2026) | Lightweight pose, interpretable posture features and duplicate/post-event false-positive filtering | Strengthens baseline demands: simple interpretable model and duplicate suppression must be compared. https://www.mdpi.com/2076-3417/16/10/4632 |
+| *Real-time fall detection with ground height awareness using LiDAR and a camera of a mobile device* (2025/26) | Distinguishes lying on bed from lying on floor using ground height with extra sensors | 2D RGB object overlap is weaker than actual 3D height; avoid asserting true 3D floor geometry from monocular pose. https://www.sciencedirect.com/science/article/pii/S1746809425008031 |
+| *A Systematic Review and Taxonomy of Fall Detection in Geriatric Care* (2026) | Notes staged-dataset optimism, patient/day false alarms, leakage and subjective deployment metrics | Require subject-level splits, leakage checks, event-level sensitivity and alert burden. https://wires.onlinelibrary.wiley.com/doi/10.1002/widm.70115 |
+| *Research of Fall Detection and Fall Prevention Technologies: A Review* (2026) | Discusses threshold sensitivity, privacy, domain shift and uncontrolled ADLs | Supports uncertainty/robustness tests; no single modality is sufficient in every setting. https://pmc.ncbi.nlm.nih.gov/articles/PMC12943967/ |
+
+## Novelty claim checklist
+1. **Not novel:** using YOLO pose, a TCN, three-state alerts, contextual objects or temporal smoothing individually.
+2. Candidate novelty: **risk-conditioned causal confirmation** with explicit latency/recall/false-alarm constraints and abstention under pose uncertainty.
+3. Show distinct behavior through ablations under matched operating points (M1–M4), failure-case statistics and held-out subjects.
+4. Avoid unverified superiority claims, such as 'first-of-its-kind'. Complete full-paper literature comparisons before submission.

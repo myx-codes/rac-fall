@@ -1,0 +1,3 @@
+video_id,dataset,subject_id,split,activity,duration_s,has_fall
+v_fall,synthetic,s1,val,fall,20,1
+v_adl,synthetic,s2,val,sitting,3600,0

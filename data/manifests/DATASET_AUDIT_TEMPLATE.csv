@@ -1,0 +1,4 @@
+dataset,version,source_url,license_media,license_code,download_verified,subjects_verified,clips_verified,onset_verified,rights_checked,sha256,notes
+CAUCAFall,v5,https://data.mendeley.com/datasets/7w7fccy7ky/5,CC BY 4.0,unknown,NO,NO,NO,NO,NO,,Review media and image rights
+URFD,unverified,https://fenix.ur.edu.pl/~mkepski/ds/uf.html,unverified,unverified,NO,NO,NO,NO,NO,,Check redistribution and subject IDs
+GMDCSA-24,v2.1,https://zenodo.org/records/13354453,unverified,MIT in GitHub repo,NO,NO,NO,NO,NO,,Keep as sealed blind test
