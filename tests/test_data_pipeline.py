@@ -7,6 +7,13 @@ import numpy as np
 import pytest
 
 from racfall.data.adapters import URFDRGBAdapter
+from racfall.data.alignment import (
+    AlignmentEvidence,
+    FrameAnnotation,
+    SCHEMA_VERSION as ALIGNMENT_SCHEMA_VERSION,
+    read_frame_annotations,
+    resolve_index_alignment,
+)
 from racfall.data.manifest import ManifestRecord, read_manifest, validate_manifest, write_manifest
 from racfall.data.pose import PoseExtractor
 from racfall.data.sequences import build_windows, normalize_pose, validate_window_leakage
@@ -138,7 +145,91 @@ def test_pose_extract_normalize_windows_and_torch_loader(tmp_path):
     bounded_windows = tmp_path / "bounded-windows.npz"
     build_windows([bounded_row], pose_path.parent, bounded_windows, window_frames=2, stride_frames=1)
     with np.load(bounded_windows, allow_pickle=False) as bounded:
-        assert bounded["labels"].tolist() == [0, 1]
+        assert bounded["labels"].tolist() == [-1, -1]
+        assert bounded["event_labels"].tolist() == [0, 1]
+
+
+def annotation(index, class_id=0):
+    return FrameAnnotation(index, class_id, 0.5, 0.5, 0.5, 0.8, f"seq-{index:05d}.txt")
+
+
+def test_terminal_extra_requires_verified_unshifted_alignment():
+    rows = [annotation(index, int(index >= 4)) for index in range(1, 7)]
+    evidence = AlignmentEvidence(
+        representative_best_matches={3: 3, 4: 4, 5: 5, 6: 5},
+        required_exact_indices=(3, 4, 5), terminal_pair_mae=0.01,
+        bbox_inside_fraction={3: 1.0, 4: 0.9, 5: 1.0},
+    )
+    result = resolve_index_alignment(5, rows, evidence)
+    assert result["status"] == "verified_terminal_extra"
+    assert result["frame_labels"] == [0, 0, 0, 1, 1]
+    assert result["quarantined_annotations"] == [6]
+
+    shifted = replace(evidence, representative_best_matches={3: 2, 4: 3, 5: 4, 6: 5})
+    rejected = resolve_index_alignment(5, rows, shifted)
+    assert rejected["sequence_quarantined"]
+    assert rejected["frame_labels"] == [-1] * 5
+    assert any("does not best-match" in reason for reason in rejected["reasons"])
+
+    exact_without_evidence = resolve_index_alignment(5, rows[:5], None)
+    assert exact_without_evidence["sequence_quarantined"]
+    assert exact_without_evidence["frame_labels"] == [-1] * 5
+
+
+def test_alignment_quarantines_missing_or_ambiguous_labels(tmp_path):
+    annotation_dir = tmp_path / "annotations"
+    annotation_dir.mkdir()
+    (annotation_dir / "seq-00001.txt").write_text("0 0.5 0.5 0.5 0.8\n", encoding="utf-8")
+    (annotation_dir / "seq-00003.txt").write_text("1 0.5 0.5 0.5 0.8\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not contiguous"):
+        read_frame_annotations(annotation_dir)
+
+    unsupported = resolve_index_alignment(5, [annotation(i) for i in range(1, 8)], None)
+    assert unsupported["sequence_quarantined"]
+    assert unsupported["quarantined_annotations"] == list(range(1, 8))
+
+
+def test_verified_ground_state_labels_are_causal_and_keep_unknown(tmp_path):
+    cv2 = __import__("cv2")
+    source = tmp_path / "frames"
+    source.mkdir()
+    for index in range(5):
+        assert cv2.imwrite(str(source / f"frame-{index:03d}.png"), np.zeros((16, 16, 3), dtype=np.uint8))
+    (tmp_path / "sync.csv").write_text(
+        "1,0\n2,40\n3,80\n4,120\n5,160\n", encoding="utf-8",
+    )
+    row = record(
+        video="causal", split="train", label="fall", source_relpath="frames",
+        source_type="image_sequence_dir", timestamp_source="sync.csv milliseconds",
+        end_timestamp_s=0.2, fps=25.0, frame_count=5,
+    )
+    pose_dir = tmp_path / "poses"
+    PoseExtractor(device="cpu", imgsz=416, model_factory=lambda _: FakePoseModel()).extract(
+        tmp_path, row, pose_dir / "causal.npz",
+    )
+    alignment_dir = tmp_path / "alignment"
+    alignment_dir.mkdir()
+    (alignment_dir / "causal.json").write_text(__import__("json").dumps({
+        "schema_version": ALIGNMENT_SCHEMA_VERSION,
+        "video_id": "causal",
+        "status": "verified_exact_count",
+        "sequence_quarantined": False,
+        # Frame 4 is deliberately unknown; frame 5 must not back-fill it.
+        "frame_labels": [0, 0, 1, -1, 1],
+    }), encoding="utf-8")
+    output = tmp_path / "causal-windows.npz"
+    summary = build_windows(
+        [row], pose_dir, output, window_frames=2, stride_frames=1,
+        alignment_dir=alignment_dir,
+    )
+    assert summary["valid_windows"] == 3
+    assert summary["invalid_windows"] == 1
+    with np.load(output, allow_pickle=False) as data:
+        # Endpoint frames are 2, 3, 4, 5: no future frame is consulted.
+        assert data["ground_state_labels"].tolist() == [0, 1, -1, 1]
+        assert data["labels"].tolist() == [0, 1, -1, 1]
+        assert data["event_labels"].tolist() == [-1, -1, -1, -1]
+        assert str(data["label_semantics"]) == "ground_state_at_causal_window_endpoint"
 
 
 def test_normalization_and_window_leakage_guards():

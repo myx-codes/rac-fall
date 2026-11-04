@@ -12,7 +12,7 @@ class PoseWindowDataset:
         except ImportError as exc:
             raise RuntimeError("Install NumPy and PyTorch to load pose windows") from exc
         self.data = self.np.load(Path(path), allow_pickle=False)
-        if str(self.data["schema_version"]) != "racfall.windows.v1":
+        if str(self.data["schema_version"]) not in {"racfall.windows.v1", "racfall.windows.v2"}:
             raise ValueError("Unsupported pose-window schema")
         selected = self.np.ones(len(self.data["labels"]), dtype=self.np.bool_)
         if split is not None:
@@ -30,6 +30,10 @@ class PoseWindowDataset:
             "features": self.torch.from_numpy(self.data["features"][index]),
             "valid": self.torch.from_numpy(self.data["valid"][index]),
             "label": self.torch.tensor(int(self.data["labels"][index]), dtype=self.torch.long),
+            "event_label": self.torch.tensor(
+                int(self.data["event_labels"][index]) if "event_labels" in self.data.files else -1,
+                dtype=self.torch.long,
+            ),
             "timestamp_s": self.torch.from_numpy(self.data["timestamp_s"][index]),
             "video_id": str(self.data["video_id"][index]),
             "subject_id": str(self.data["subject_id"][index]),
@@ -50,7 +54,9 @@ def make_dataloader(path: str | Path, *, split: str, batch_size: int = 32,
     dataset = PoseWindowDataset(path, split=split, include_unknown=include_unknown)
     if len(dataset) == 0:
         dataset.close()
-        raise ValueError(f"No eligible windows for split={split!r}; verify event labels and split assignment")
+        raise ValueError(
+            f"No eligible windows for split={split!r}; verify ground-state labels and split assignment"
+        )
     if shuffle is None:
         shuffle = split == "train"
     return torch.utils.data.DataLoader(

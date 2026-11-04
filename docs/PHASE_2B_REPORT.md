@@ -1,7 +1,7 @@
 # Phase 2B — Dataset Collection & Preprocessing Report
 
 Date: 2026-11-04
-Status: pipeline implemented, synthetic-tested, and validated on one real CAUCAFall v5 video; full preprocessing stopped pending review
+Status: Phase 2B.1 annotation alignment validated on one real CAUCAFall v5 video; full preprocessing stopped pending review
 
 ## Scope and safeguards
 
@@ -67,7 +67,9 @@ Each per-video compressed NPZ stores:
 
 Normalization centers on visible hips, then shoulders, then visible-point mean. Scale uses torso length bounded by 25% of visible body extent, or visible-point extent when torso landmarks are missing. Degenerate/missing poses become zero-valued features with a false mask, never an implicit safe pose.
 
-Temporal windows are generated within one video and one track only. They inherit the source subject/video split. A second leakage check rejects subject/sequence reuse or overlapping intervals across different splits. Windows contain 51 features per frame (34 normalized coordinates + 17 confidence values), a separate 17-point validity mask, timestamps, label, video, subject, track, and split. Pure ADL windows receive label `0`. A fall-source window receives `1` only when its causal endpoint lies inside an explicit source/researcher-verified event interval; fall clips without an interval receive `-1` (unknown), not an invented target. PyTorch loaders exclude unknown targets by default but can expose them for annotation/QA.
+Temporal windows are generated within one video and one track only. They inherit the source subject/video split. A second leakage check rejects subject/sequence reuse or overlapping intervals across different splits. Windows contain 51 features per frame (34 normalized coordinates + 17 confidence values), a separate 17-point validity mask, timestamps, video, subject, track, and split.
+
+Window schema v2 separates two targets. `ground_state_labels` (and its compatibility alias `labels`) is the verified frame-level ground state at the causal window endpoint: `0` means not on the ground due to a fall, `1` means on the ground due to a fall, and `-1` means unknown. It never reads a later frame. `event_labels` describes a true fall-event interval only when explicit onset/end annotations exist; otherwise it stays `-1`. A class-1 ground-state transition is not promoted into an event onset. PyTorch loaders train/select on ground-state labels and exclude `-1` by default, while retaining unknown samples for explicit QA.
 
 ## CLI
 
@@ -91,12 +93,20 @@ racfall extract-poses \
   --output-dir /path/outside/repo/poses/caucafall-pilot \
   --device mps --imgsz 416 --limit 1
 
+racfall align-caucafall-annotations \
+  --manifest /path/outside/repo/manifests/caucafall-pilot.csv \
+  --dataset-root /path/outside/repo/CAUCAFall \
+  --reference-png-dir /path/outside/repo/alignment/official_png \
+  --pose-dir /path/outside/repo/poses/caucafall-pilot \
+  --output-dir /path/outside/repo/alignment/verified --limit 1
+
 # Only after pilot inspection succeeds
 racfall extract-poses --manifest ... --dataset-root ... --output-dir ... --device mps --imgsz 416
 
 racfall build-pose-sequences \
   --manifest /path/outside/repo/manifests/caucafall_split.csv \
   --pose-dir /path/outside/repo/poses/caucafall \
+  --alignment-dir /path/outside/repo/alignment/verified \
   --output /path/outside/repo/windows/caucafall_w30_s15.npz \
   --window-frames 30 --stride-frames 15
 ```
@@ -105,8 +115,8 @@ URFD uses `racfall manifest-urfd --root ... --output ...`; ZIP archives can rema
 
 ## Verification and measured results
 
-- Automated tests after the real-pilot normalization fix: 20 passed in 0.75 seconds.
-- Synthetic fixture coverage: manifest round-trip, URFD ZIP decoding and timestamp-derived FPS, 17-keypoint validity masking, compact NPZ output, normalization, temporal windows, leakage rejection, blind-test rejection, PyTorch Dataset, and DataLoader batching.
+- Automated tests after Phase 2B.1: 23 passed in 0.53 seconds.
+- Synthetic fixture coverage: manifest round-trip, URFD ZIP decoding and timestamp-derived FPS, 17-keypoint validity masking, compact NPZ output, normalization, temporal windows, leakage rejection, blind-test rejection, PyTorch Dataset/DataLoader, off-by-one rejection, class transitions, missing annotation indices, terminal-extra quarantine, causal endpoint labels, unknown preservation, and ground-state/event-label separation.
 - No accuracy or model-training result exists in Phase 2B.
 
 ### Real CAUCAFall v5 one-video pilot
@@ -116,43 +126,59 @@ Source and storage:
 - Official source only: Mendeley v5 public file `Subject.1/Fall forward/FallForwardS1.avi`.
 - External path: `~/datasets/RAC-Fall/CAUCAFall/`; nothing under this path is tracked by Git.
 - AVI size: 1,193,966 bytes. SHA-256 `fcd0d92864c70999616e22af619b0bbde020496ce94da2b4c5f24c3efb149bdf`, exactly matching Mendeley metadata.
-- Downloaded annotations: 191 frame TXT files (7,258 bytes total) and `classes.txt`. PNG copies were not downloaded. Original files were not modified.
+- Downloaded annotations: 191 frame TXT files (7,258 bytes total) and `classes.txt`. Six official representative PNGs were downloaded for alignment QA only: indices 1, 95, 131, 132, 190, and 191. Original files were not modified.
 
 Decode and annotation integrity:
 
 - OpenCV decoded 190 frames at 20 FPS, 720×480, duration 9.5 s.
 - This differs from the dataset page's nominal 23 FPS and 1080×960; container metadata is authoritative for this manifest row.
-- The official folder contains 191 PNG/TXT frame pairs, but the AVI decodes to 190 frames. The extra annotation is `cfs1-00191.txt`; this unresolved off-by-one prevents blindly aligning every annotation to an AVI frame.
+- The official folder contains 191 PNG/TXT frame pairs, but both container metadata and complete OpenCV decoding report 190 frames. Decoded indices are 0–189 at timestamps 0.00–9.45 s; source PNG/TXT names are one-based `cfs1-00001`–`cfs1-00191`.
 - All 191 TXT files contain exactly one five-field normalized YOLO row. No malformed rows, unknown class IDs, or values outside `[0,1]` were found.
-- `classes.txt` maps class 0 to `nofall` and class 1 to `fall`; counts are 131 and 60 frame annotations respectively. These posture/segmentation classes were not converted into losing-balance onset/end timestamps. Manifest event timestamps remain empty.
+- `classes.txt` maps class 0 to `nofall` and class 1 to `fall`; source counts are 131 and 60 frame annotations respectively. In the dataset's original semantics, class 1 records a person on the ground due to a fall, not necessarily fall initiation. These frame classes were not converted into losing-balance onset/end timestamps. Manifest event timestamps remain empty.
+
+### Phase 2B.1 alignment findings
+
+Confirmed findings:
+
+- Official PNGs 95, 131, 132, and 190 each have their lowest full-frame pixel error against decoded AVI frames 95, 131, 132, and 190 respectively. Thus there is no supported global ±1 shift through the middle, the class transition, or the final decoded frame.
+- Official PNG 191 also best matches decoded frame 190. Official PNGs 190 and 191 are distinct but near-identical (mean absolute pixel difference 0.011895 on the 0–255 scale). Both therefore represent the final decoded image content; annotation 191 has no distinct decoded AVI frame.
+- The opening is visually static: PNG 1 best matches decoded frame 3 by pixel error, so pixels alone cannot uniquely distinguish the first few frames. This ambiguity does not override the exact middle/transition/end evidence.
+- TXT class 0 occupies source indices 1–131; class 1 starts at 132 and continues through 191. The accepted mapping preserves source indices 1–190 without a shift, yielding 131 class-0 and 59 class-1 decoded-frame labels. Source annotation 191 is explicitly quarantined and remains recorded in provenance; it is not silently dropped or shifted.
+- Pose-to-official-box correspondence for representative decoded frames 1, 95, 131, 132, and 190 placed respectively 100%, 100%, 100%, 88.24%, and 100% of valid keypoints inside the official normalized box. The deterministic acceptance floor is 80%.
+- The provenance JSON records source checksum, video metadata, timestamp formula, every annotation filename, class semantics, sampled PNG checksums/errors, bounding-box correspondence, mapping rule, label vector, thresholds, and quarantined source indices. If any required representative frame shifts, any required box fails, the terminal pair is not a near-duplicate, indices are missing, or the count relationship differs, the entire sequence is marked quarantined and all frame labels become `-1`.
+
+Assumption/inference, not confirmed source metadata:
+
+- The most plausible explanation is that the source frame/annotation export included an additional terminal still (for example, an inclusive endpoint), while the AVI contains 190 timed frames. The exact export tool or cause is not documented by the inspected official files, so the pipeline does not encode that explanation—only the measured terminal-extra relationship.
 
 Pose extraction (`YOLO26n-Pose`, MPS, `imgsz=416`, ByteTrack):
 
 - 190 frames processed; 188 pose detections; two frames with no detected pose.
 - One stable tracking ID (`1`) covers all 188 detections.
-- Extraction time 2.6827 s; measured pipeline throughput 70.823 FPS; mean model-reported inference latency 3.485 ms.
-- Whole CLI wall time 3.81 s. Maximum resident set size 634,486,784 bytes; peak memory footprint 466,126,264 bytes; zero swaps.
+- Phase 2B.1 rerun extraction time 2.5424 s; measured pipeline throughput 74.731 FPS; mean model-reported inference latency 3.511 ms.
+- Whole rerun CLI wall time 3.39 s. Maximum resident set size 635,863,040 bytes; peak memory footprint 475,121,128 bytes; zero swaps.
 - 2,818 of 3,196 keypoints are valid at the 0.25 threshold (88.17%). Mean valid confidence 0.8821; minimum 0.2512; maximum 0.9988.
 - Timestamps are strictly increasing from 0.00 to 9.45 s. Invalid coordinates are `NaN` and have `valid=false`.
-- Compressed pose output: 35,876 bytes.
+- Compressed rerun pose output: 35,899 bytes.
 
 Normalization and temporal windows:
 
 - The first real run exposed a projected-torso scale collapse with maximum absolute normalized coordinate 18.32. Normalization now bounds torso scale by 25% of visible body extent; the rebuilt maximum is 3.57 and all features remain finite.
 - Generated 11 causal windows of 30 frames with stride 15 for the one stable track. Feature shape is `(11, 30, 51)` and validity-mask shape is `(11, 30, 17)`.
 - Missing normalized coordinates are zero only where the explicit mask is false. Window timestamps are strictly increasing.
-- All 11 targets are `-1` (unknown), because no source-verified fall onset/end exists. Default training loaders therefore exclude them; an explicit QA loader produced a `(4, 30, 51)` batch without training.
-- Window generation wall time 0.09 s; maximum resident set size 35,487,744 bytes; zero swaps. Compressed window output: 34,604 bytes.
+- The earlier pre-alignment run correctly left all 11 targets unknown. After verified Phase 2B.1 alignment, causal window endpoints are source frames 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, and 180. Ground-state targets are seven class-0 and four class-1 windows: 11 valid, 0 invalid. No future-frame lookup or overlap across sequences is used.
+- All 11 separate event targets remain `-1`, because no source-verified fall onset/end exists. The class transition at source frame 132 is not declared to be a fall-event onset.
+- Final rerun alignment audit wall time was 0.97 s; maximum resident set size was 302,104,576 bytes; zero swaps. Its JSON output is 9,385 bytes.
+- Rebuilt window generation wall time was 0.10 s; maximum resident set size was 38,715,392 bytes; zero swaps. Compressed schema-v2 output is 35,548 bytes.
 
 Synthetic test speed is deliberately not reported as dataset processing performance.
 
 ## Unresolved gate before full preprocessing
 
-1. Resolve or explicitly document the 191 annotation rows versus 190 decoded AVI frames before frame-level annotation alignment.
-2. Decide whether the nominal-vs-container FPS/resolution discrepancy is systematic by auditing additional development videos, without preprocessing the full dataset yet.
-3. Review participant likeness/consent and redistribution handling under CC BY 4.0.
-4. Obtain the remaining official files outside Git, verify the complete 10-subject/100-activity inventory and checksums, then generate the frozen 6/2/2 assignment.
-5. Define and review event onset annotations on development subjects only; do not derive them automatically from `fall` posture labels.
-6. Re-run a small multi-activity development pilot before authorizing full pose extraction.
+1. Determine whether the terminal-extra pattern and nominal-vs-container FPS/resolution discrepancy recur by auditing additional development videos before generalizing this mapping; any sequence without its own required evidence remains quarantined.
+2. Review participant likeness/consent and redistribution handling under CC BY 4.0.
+3. Obtain the remaining official files outside Git only after approval, verify the complete 10-subject/100-activity inventory and checksums, then generate the frozen 6/2/2 assignment.
+4. Define and review true event onset/end annotations on development subjects only; do not derive them automatically from ground-state class transitions.
+5. Re-run a small multi-activity development pilot before authorizing full pose extraction.
 
 Phase 3 training is intentionally out of scope and must not start until these gates are resolved.

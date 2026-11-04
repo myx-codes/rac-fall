@@ -57,6 +57,17 @@ def main():
     sequences.add_argument("--output", required=True)
     sequences.add_argument("--window-frames", type=int, default=30)
     sequences.add_argument("--stride-frames", type=int, default=15)
+    sequences.add_argument("--alignment-dir", help="Verified per-video annotation-alignment JSON directory")
+    align = command.add_parser(
+        "align-caucafall-annotations",
+        help="Validate CAUCAFall TXT/PNG/video alignment and write fail-closed provenance",
+    )
+    align.add_argument("--manifest", required=True)
+    align.add_argument("--dataset-root", required=True)
+    align.add_argument("--reference-png-dir", required=True)
+    align.add_argument("--pose-dir", required=True)
+    align.add_argument("--output-dir", required=True)
+    align.add_argument("--limit", type=int, default=1)
     args = parser.parse_args()
     if args.command == "env-check":
         print_diagnostic()
@@ -120,8 +131,28 @@ def main():
         result = build_windows(
             read_manifest(args.manifest), args.pose_dir, args.output,
             window_frames=args.window_frames, stride_frames=args.stride_frames,
+            alignment_dir=args.alignment_dir,
         )
         print(json.dumps(result, indent=2))
+    elif args.command == "align-caucafall-annotations":
+        from .data.alignment import audit_caucafall_alignment
+        from .data.manifest import read_manifest
+        if args.limit <= 0:
+            raise ValueError("--limit must be > 0")
+        rows = read_manifest(args.manifest)[:args.limit]
+        output_dir = Path(args.output_dir)
+        results = []
+        for row in rows:
+            payload = audit_caucafall_alignment(
+                args.dataset_root, row, args.reference_png_dir,
+                Path(args.pose_dir) / f"{row.video_id}.npz",
+                output_dir / f"{row.video_id}.json",
+            )
+            results.append({
+                "video_id": row.video_id, "status": payload["status"],
+                "quarantined_annotations": payload["quarantined_annotations"],
+            })
+        print(json.dumps({"processed": len(results), "results": results}, indent=2))
 
 
 if __name__ == "__main__":

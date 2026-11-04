@@ -74,6 +74,7 @@ def build_windows(
     *,
     window_frames: int = 30,
     stride_frames: int = 15,
+    alignment_dir: str | Path | None = None,
 ) -> dict:
     if window_frames <= 1 or stride_frames <= 0:
         raise ValueError("window_frames must be > 1 and stride_frames must be > 0")
@@ -86,9 +87,12 @@ def build_windows(
     windows = []
     masks = []
     labels = []
+    event_labels = []
     timestamps = []
     metadata = []
-    label_names = {-1: "unknown", 0: "non_fall", 1: "fall"}
+    ground_label_names = {-1: "unknown", 0: "not_on_ground_due_to_fall", 1: "on_ground_due_to_fall"}
+    event_label_names = {-1: "unknown", 0: "no_event_at_endpoint", 1: "inside_verified_event"}
+    alignment_root = Path(alignment_dir) if alignment_dir is not None else None
     for record in rows:
         if not record.split:
             raise ValueError(f"{record.video_id}: split must be assigned before window generation")
@@ -101,6 +105,14 @@ def build_windows(
             if str(pose["video_id"]) != record.video_id:
                 raise ValueError(f"Pose/manifest video mismatch: {path}")
             n_frames = len(pose["frame_index"])
+            if alignment_root is not None:
+                from .alignment import load_alignment_labels
+                frame_labels, alignment_status = load_alignment_labels(
+                    alignment_root / f"{record.video_id}.json", record.video_id, n_frames,
+                )
+            else:
+                frame_labels = [0] * n_frames if record.label == "non_fall" else [-1] * n_frames
+                alignment_status = "sequence_label_only" if record.label == "non_fall" else "unverified"
             offsets = pose["frame_offsets"]
             detection_tracks = pose["track_id"]
             tracks = sorted(int(value) for value in np.unique(detection_tracks) if int(value) >= 0)
@@ -125,18 +137,25 @@ def build_windows(
                     masks.append(validity[start:end])
                     window_timestamps = pose["timestamp_s"][start:end]
                     timestamps.append(window_timestamps)
+                    # A causal target uses only the annotation at the window endpoint.
+                    # It never scans future frames or infers a transition boundary.
+                    window_label = int(frame_labels[end - 1])
                     if record.label == "non_fall":
-                        window_label = 0
-                    elif record.label_start_s:
+                        event_label = 0
+                    elif record.label_start_s != "" and record.label_end_s != "":
                         current_time = float(window_timestamps[-1])
-                        window_label = int(float(record.label_start_s) <= current_time <= float(record.label_end_s))
+                        event_label = int(
+                            float(record.label_start_s) <= current_time <= float(record.label_end_s)
+                        )
                     else:
-                        window_label = -1
+                        event_label = -1
                     labels.append(window_label)
+                    event_labels.append(event_label)
                     metadata.append({
                         "dataset": record.dataset, "subject_id": record.subject_id,
                         "video_id": record.video_id, "track_id": track_id, "split": record.split,
                         "start_frame": start, "end_frame": end,
+                        "alignment_status": alignment_status,
                     })
     if not windows:
         raise ValueError("No complete tracked pose windows were generated")
@@ -145,9 +164,12 @@ def build_windows(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("wb") as handle:
         np.savez_compressed(
-            handle, schema_version=np.asarray("racfall.windows.v1"),
+            handle, schema_version=np.asarray("racfall.windows.v2"),
             features=np.asarray(windows, dtype=np.float32),
             valid=np.asarray(masks, dtype=np.bool_), labels=np.asarray(labels, dtype=np.int64),
+            ground_state_labels=np.asarray(labels, dtype=np.int64),
+            event_labels=np.asarray(event_labels, dtype=np.int64),
+            label_semantics=np.asarray("ground_state_at_causal_window_endpoint"),
             timestamp_s=np.asarray(timestamps, dtype=np.float64),
             dataset=np.asarray([row["dataset"] for row in metadata]),
             subject_id=np.asarray([row["subject_id"] for row in metadata]),
@@ -156,9 +178,17 @@ def build_windows(
             split=np.asarray([row["split"] for row in metadata]),
             start_frame=np.asarray([row["start_frame"] for row in metadata], dtype=np.int32),
             end_frame=np.asarray([row["end_frame"] for row in metadata], dtype=np.int32),
+            alignment_status=np.asarray([row["alignment_status"] for row in metadata]),
         )
+    valid_windows = sum(value >= 0 for value in labels)
     return {
         "windows": len(windows), "window_frames": window_frames,
         "stride_frames": stride_frames, "output": str(output_path),
-        "label_counts": {name: labels.count(value) for value, name in label_names.items()},
+        "label_counts": {name: labels.count(value) for value, name in ground_label_names.items()},
+        "valid_windows": valid_windows,
+        "invalid_windows": len(labels) - valid_windows,
+        "event_label_counts": {
+            name: event_labels.count(value) for value, name in event_label_names.items()
+        },
+        "label_semantics": "ground_state_at_causal_window_endpoint",
     }

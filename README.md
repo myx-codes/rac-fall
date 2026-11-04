@@ -48,7 +48,11 @@ Phase 2B adds strict CAUCAFall-video and URFD-RGB-sequence adapters, provenance 
 racfall manifest-caucafall --root /external/CAUCAFall --label-map /external/caucafall_labels.json --output /external/manifests/caucafall.csv
 racfall split-caucafall --manifest /external/manifests/caucafall.csv --output /external/manifests/caucafall_split.csv --assignment-output /external/manifests/caucafall_split.json
 racfall extract-poses --manifest /external/manifests/caucafall_split.csv --dataset-root /external/CAUCAFall --output-dir /external/poses/pilot --device mps --imgsz 416 --limit 1
+racfall align-caucafall-annotations --manifest /external/manifests/caucafall_pilot.csv --dataset-root /external/CAUCAFall --reference-png-dir /external/alignment/official_png --pose-dir /external/poses/pilot --output-dir /external/alignment/verified --limit 1
+racfall build-pose-sequences --manifest /external/manifests/caucafall_pilot.csv --pose-dir /external/poses/pilot --alignment-dir /external/alignment/verified --output /external/windows/pilot.npz
 ```
+
+CAUCAFall frame labels are treated as causal ground-state classification (`1` means on the ground due to a fall), not as fall-event onset/end annotations. Verified frame alignment is stored with explicit provenance; ambiguous sequences and unmapped annotations are quarantined, and unknown labels remain `-1`.
 
 See `docs/PHASE_2B_REPORT.md` for the audited source facts, full CLI workflow, schemas, blind-test policy, and unresolved real-data pilot gate. No Phase 3 model training is implemented.
 
