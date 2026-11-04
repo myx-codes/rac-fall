@@ -1,6 +1,8 @@
 """Pose normalization, causal temporal windows, and leakage validation."""
 from __future__ import annotations
 
+from dataclasses import asdict
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -13,7 +15,8 @@ def normalize_pose(xy, confidence, valid):
     xy = np.asarray(xy, dtype=np.float32)
     confidence = np.asarray(confidence, dtype=np.float32)
     valid = np.asarray(valid, dtype=np.bool_)
-    usable = valid & np.isfinite(xy).all(axis=1)
+    usable = (valid & np.isfinite(xy).all(axis=1) & np.isfinite(confidence) &
+              (confidence > 0))
     normalized = np.zeros((17, 2), dtype=np.float32)
     if not usable.any():
         return normalized, np.nan_to_num(confidence, nan=0.0), usable
@@ -75,9 +78,13 @@ def build_windows(
     window_frames: int = 30,
     stride_frames: int = 15,
     alignment_dir: str | Path | None = None,
+    min_track_coverage: float = 0.5,
 ) -> dict:
-    if window_frames <= 1 or stride_frames <= 0:
-        raise ValueError("window_frames must be > 1 and stride_frames must be > 0")
+    if window_frames <= 1 or stride_frames <= 0 or not 0.0 <= min_track_coverage <= 1.0:
+        raise ValueError(
+            "window_frames must be > 1, stride_frames must be > 0, and "
+            "min_track_coverage must be in [0, 1]"
+        )
     rows = list(records)
     validate_manifest(rows)
     if any(row.locked_blind or row.split == "blind_test" for row in rows):
@@ -89,7 +96,10 @@ def build_windows(
     labels = []
     event_labels = []
     timestamps = []
+    track_coverages = []
+    source_track_ids = []
     metadata = []
+    skipped_low_coverage = 0
     ground_label_names = {-1: "unknown", 0: "not_on_ground_due_to_fall", 1: "on_ground_due_to_fall"}
     event_label_names = {-1: "unknown", 0: "no_event_at_endpoint", 1: "inside_verified_event"}
     alignment_root = Path(alignment_dir) if alignment_dir is not None else None
@@ -115,48 +125,60 @@ def build_windows(
                 alignment_status = "sequence_label_only" if record.label == "non_fall" else "unverified"
             offsets = pose["frame_offsets"]
             detection_tracks = pose["track_id"]
-            tracks = sorted(int(value) for value in np.unique(detection_tracks) if int(value) >= 0)
-            for track_id in tracks:
-                features = np.zeros((n_frames, 17, 3), dtype=np.float32)
-                validity = np.zeros((n_frames, 17), dtype=np.bool_)
-                for frame_index in range(n_frames):
-                    candidates = range(int(offsets[frame_index]), int(offsets[frame_index + 1]))
-                    detection = next((index for index in candidates
-                                      if int(detection_tracks[index]) == track_id), None)
-                    if detection is None:
-                        continue
-                    norm_xy, confidence, valid = normalize_pose(
-                        pose["xy"][detection], pose["confidence"][detection], pose["valid"][detection]
+            from .target import (
+                CAUSAL_TARGET_TRACK_ID, TargetSelectionConfig, select_causal_target,
+            )
+            target_config = TargetSelectionConfig()
+            selected = select_causal_target(
+                offsets, detection_tracks, pose["xy"], pose["confidence"], pose["valid"],
+                record.width, record.height, config=target_config,
+            )
+            features = np.zeros((n_frames, 17, 3), dtype=np.float32)
+            validity = np.zeros((n_frames, 17), dtype=np.bool_)
+            presence = selected >= 0
+            selected_source_tracks = np.full(n_frames, -1, dtype=np.int64)
+            for frame_index, detection in enumerate(selected):
+                if detection < 0:
+                    continue
+                selected_source_tracks[frame_index] = int(detection_tracks[detection])
+                norm_xy, confidence, valid = normalize_pose(
+                    pose["xy"][detection], pose["confidence"][detection], pose["valid"][detection]
+                )
+                features[frame_index, :, :2] = norm_xy
+                features[frame_index, :, 2] = confidence
+                validity[frame_index] = valid
+            for start in range(0, n_frames - window_frames + 1, stride_frames):
+                end = start + window_frames
+                track_coverage = float(presence[start:end].mean())
+                if track_coverage < min_track_coverage:
+                    skipped_low_coverage += 1
+                    continue
+                windows.append(features[start:end].reshape(window_frames, 51))
+                masks.append(validity[start:end])
+                window_timestamps = pose["timestamp_s"][start:end]
+                timestamps.append(window_timestamps)
+                track_coverages.append(track_coverage)
+                source_track_ids.append(selected_source_tracks[start:end])
+                # A causal target uses only the annotation at the window endpoint.
+                # It never scans future frames or infers a transition boundary.
+                window_label = int(frame_labels[end - 1])
+                if record.label == "non_fall":
+                    event_label = 0
+                elif record.label_start_s != "" and record.label_end_s != "":
+                    current_time = float(window_timestamps[-1])
+                    event_label = int(
+                        float(record.label_start_s) <= current_time <= float(record.label_end_s)
                     )
-                    features[frame_index, :, :2] = norm_xy
-                    features[frame_index, :, 2] = confidence
-                    validity[frame_index] = valid
-                for start in range(0, n_frames - window_frames + 1, stride_frames):
-                    end = start + window_frames
-                    windows.append(features[start:end].reshape(window_frames, 51))
-                    masks.append(validity[start:end])
-                    window_timestamps = pose["timestamp_s"][start:end]
-                    timestamps.append(window_timestamps)
-                    # A causal target uses only the annotation at the window endpoint.
-                    # It never scans future frames or infers a transition boundary.
-                    window_label = int(frame_labels[end - 1])
-                    if record.label == "non_fall":
-                        event_label = 0
-                    elif record.label_start_s != "" and record.label_end_s != "":
-                        current_time = float(window_timestamps[-1])
-                        event_label = int(
-                            float(record.label_start_s) <= current_time <= float(record.label_end_s)
-                        )
-                    else:
-                        event_label = -1
-                    labels.append(window_label)
-                    event_labels.append(event_label)
-                    metadata.append({
-                        "dataset": record.dataset, "subject_id": record.subject_id,
-                        "video_id": record.video_id, "track_id": track_id, "split": record.split,
-                        "start_frame": start, "end_frame": end,
-                        "alignment_status": alignment_status,
-                    })
+                else:
+                    event_label = -1
+                labels.append(window_label)
+                event_labels.append(event_label)
+                metadata.append({
+                    "dataset": record.dataset, "subject_id": record.subject_id,
+                    "video_id": record.video_id, "track_id": CAUSAL_TARGET_TRACK_ID,
+                    "split": record.split, "start_frame": start, "end_frame": end,
+                    "alignment_status": alignment_status,
+                })
     if not windows:
         raise ValueError("No complete tracked pose windows were generated")
     validate_window_leakage(metadata)
@@ -164,7 +186,7 @@ def build_windows(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("wb") as handle:
         np.savez_compressed(
-            handle, schema_version=np.asarray("racfall.windows.v2"),
+            handle, schema_version=np.asarray("racfall.windows.v3"),
             features=np.asarray(windows, dtype=np.float32),
             valid=np.asarray(masks, dtype=np.bool_), labels=np.asarray(labels, dtype=np.int64),
             ground_state_labels=np.asarray(labels, dtype=np.int64),
@@ -179,6 +201,11 @@ def build_windows(
             start_frame=np.asarray([row["start_frame"] for row in metadata], dtype=np.int32),
             end_frame=np.asarray([row["end_frame"] for row in metadata], dtype=np.int32),
             alignment_status=np.asarray([row["alignment_status"] for row in metadata]),
+            track_coverage=np.asarray(track_coverages, dtype=np.float32),
+            min_track_coverage=np.asarray(min_track_coverage, dtype=np.float32),
+            source_track_id=np.asarray(source_track_ids, dtype=np.int64),
+            target_selection=np.asarray("causal_geometry_without_annotations"),
+            target_selection_config=np.asarray(json.dumps(asdict(target_config), sort_keys=True)),
         )
     valid_windows = sum(value >= 0 for value in labels)
     return {
@@ -191,4 +218,6 @@ def build_windows(
             name: event_labels.count(value) for value, name in event_label_names.items()
         },
         "label_semantics": "ground_state_at_causal_window_endpoint",
+        "min_track_coverage": min_track_coverage,
+        "skipped_low_coverage_windows": skipped_low_coverage,
     }

@@ -12,7 +12,9 @@ class PoseWindowDataset:
         except ImportError as exc:
             raise RuntimeError("Install NumPy and PyTorch to load pose windows") from exc
         self.data = self.np.load(Path(path), allow_pickle=False)
-        if str(self.data["schema_version"]) not in {"racfall.windows.v1", "racfall.windows.v2"}:
+        if str(self.data["schema_version"]) not in {
+            "racfall.windows.v1", "racfall.windows.v2", "racfall.windows.v3",
+        }:
             raise ValueError("Unsupported pose-window schema")
         selected = self.np.ones(len(self.data["labels"]), dtype=self.np.bool_)
         if split is not None:
@@ -34,6 +36,13 @@ class PoseWindowDataset:
                 int(self.data["event_labels"][index]) if "event_labels" in self.data.files else -1,
                 dtype=self.torch.long,
             ),
+            "track_coverage": self.torch.tensor(
+                float(self.data["track_coverage"][index])
+                if "track_coverage" in self.data.files else 1.0,
+                dtype=self.torch.float32,
+            ),
+            "source_track_id": self.torch.from_numpy(self.data["source_track_id"][index])
+            if "source_track_id" in self.data.files else None,
             "timestamp_s": self.torch.from_numpy(self.data["timestamp_s"][index]),
             "video_id": str(self.data["video_id"][index]),
             "subject_id": str(self.data["subject_id"][index]),

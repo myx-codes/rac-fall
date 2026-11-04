@@ -1,0 +1,6 @@
+{
+  "dataset": "CAUCAFall v5",
+  "exposed_subjects": ["Subject.3", "Subject.5"],
+  "first_exposure_phase": "Phase 2B.2 multi-subject development audit",
+  "policy": "These subjects must not be represented as an untouched internal test set. A replacement split protocol must be frozen without using audit performance."
+}

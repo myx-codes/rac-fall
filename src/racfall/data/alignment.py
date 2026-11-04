@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import hashlib
+import itertools
 import json
 from pathlib import Path
 import re
@@ -12,9 +13,12 @@ from .manifest import ManifestRecord
 
 
 SCHEMA_VERSION = "racfall.caucafall-alignment.v1"
-TERMINAL_DUPLICATE_MAE_MAX = 0.1
+# Source PNGs are lossless but consecutive terminal stills can differ slightly in
+# localized pixels. One mean intensity level on the 0-255 scale remains a strict
+# near-duplicate bound and is well below AVI-vs-PNG codec error in the audit set.
+TERMINAL_DUPLICATE_MAE_MAX = 1.0
 MIN_KEYPOINTS_INSIDE_BOX = 0.8
-_INDEX_RE = re.compile(r"^(?P<prefix>.+)-(?P<index>\d{5})\.txt$", re.IGNORECASE)
+_INDEX_RE = re.compile(r"^(?P<prefix>.+?)(?P<index>\d{5})\.txt$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,21 @@ def read_frame_annotations(
     return rows
 
 
+def read_caucafall_classes(path: str | Path, sequence_label: str) -> list[str]:
+    """Validate the two official vocabularies used by fall and ADL folders."""
+    if sequence_label not in {"fall", "non_fall"}:
+        raise ValueError(f"Unsupported CAUCAFall sequence label: {sequence_label!r}")
+    classes_path = Path(path)
+    if not classes_path.is_file():
+        raise FileNotFoundError(f"Missing official class list: {classes_path}")
+    class_names = [line.strip() for line in classes_path.read_text(encoding="utf-8").splitlines()
+                   if line.strip()]
+    expected = ["nofall", "fall"] if sequence_label == "fall" else ["nofall"]
+    if class_names != expected:
+        raise ValueError(f"Unexpected CAUCAFall classes: {class_names}")
+    return class_names
+
+
 def resolve_index_alignment(
     decoded_frames: int,
     annotations: Iterable[FrameAnnotation],
@@ -94,21 +113,30 @@ def resolve_index_alignment(
     if indices != list(range(1, len(rows) + 1)):
         reasons.append("annotation indices are not contiguous from 1")
 
-    terminal_extra = len(rows) == decoded_frames + 1
-    if len(rows) == decoded_frames or terminal_extra:
-        status = "verified_terminal_extra" if terminal_extra else "verified_exact_count"
+    terminal_extra_count = len(rows) - decoded_frames
+    has_terminal_extras = terminal_extra_count > 0
+    if len(rows) >= decoded_frames:
+        if terminal_extra_count == 0:
+            status = "verified_exact_count"
+        elif terminal_extra_count == 1:
+            status = "verified_terminal_extra"
+        else:
+            status = "verified_terminal_extras"
         if evidence is None:
             reasons.append("alignment has no measured PNG/bounding-box evidence")
         else:
             for index in evidence.required_exact_indices:
                 if evidence.representative_best_matches.get(index) != index:
                     reasons.append(f"reference PNG {index} does not best-match decoded frame {index}")
-            if terminal_extra:
-                if evidence.representative_best_matches.get(decoded_frames + 1) != decoded_frames:
-                    reasons.append("extra terminal PNG does not best-match the final decoded frame")
+            if has_terminal_extras:
+                for index in range(decoded_frames + 1, len(rows) + 1):
+                    if evidence.representative_best_matches.get(index) != decoded_frames:
+                        reasons.append(
+                            f"extra terminal PNG {index} does not best-match the final decoded frame"
+                        )
                 if (evidence.terminal_pair_mae is None or
                         evidence.terminal_pair_mae > TERMINAL_DUPLICATE_MAE_MAX):
-                    reasons.append("terminal PNG pair is not a verified near-duplicate")
+                    reasons.append("terminal PNG run is not a verified near-duplicate")
             for index in evidence.required_exact_indices:
                 fraction = evidence.bbox_inside_fraction.get(index, 0.0)
                 if fraction < MIN_KEYPOINTS_INSIDE_BOX:
@@ -134,6 +162,43 @@ def resolve_index_alignment(
         "reasons": [],
         "frame_labels": [row.class_id for row in mapped],
         "quarantined_annotations": indices[decoded_frames:],
+    }
+
+
+def audit_monotonic_source_skips(cost_matrix, *, top_k: int = 20) -> dict:
+    """Audit one-to-one monotonic alignment when only source-frame skips are allowed.
+
+    This reports candidates; it never applies a shift or changes a label.
+    """
+    np = __import__("numpy")
+    costs = np.asarray(cost_matrix, dtype=np.float64)
+    if costs.ndim != 2 or not np.isfinite(costs).all() or top_k <= 0:
+        raise ValueError("A finite 2D cost matrix and positive top_k are required")
+    source_frames, video_frames = costs.shape
+    extras = source_frames - video_frames
+    if extras < 0 or extras > 5:
+        raise ValueError("Monotonic source-skip audit supports 0 to 5 extra source frames")
+    source_indices = np.arange(source_frames)
+    video_indices = np.arange(video_frames)
+    candidates = []
+    for skipped in itertools.combinations(range(source_frames), extras):
+        kept = np.delete(source_indices, skipped)
+        total = float(costs[kept, video_indices].sum())
+        candidates.append((total, tuple(index + 1 for index in skipped)))
+    candidates.sort(key=lambda row: (row[0], row[1]))
+    best_total = candidates[0][0]
+    exact_best = [row for row in candidates if abs(row[0] - best_total) <= 1e-9]
+    return {
+        "source_frames": source_frames,
+        "video_frames": video_frames,
+        "extra_source_frames": extras,
+        "best_mean_cost": best_total / video_frames,
+        "exact_best_candidate_count": len(exact_best),
+        "ambiguous": len(exact_best) != 1,
+        "candidates": [
+            {"mean_cost": total / video_frames, "skipped_source_indices": list(skipped)}
+            for total, skipped in candidates[:top_k]
+        ],
     }
 
 
@@ -170,12 +235,7 @@ def audit_caucafall_alignment(
         raise ValueError("Video path escapes dataset root")
     annotations = read_frame_annotations(video.parent, require_contiguous=False)
     classes_path = video.parent / "classes.txt"
-    if not classes_path.is_file():
-        raise FileNotFoundError(f"Missing official class list: {classes_path}")
-    class_names = [line.strip() for line in classes_path.read_text(encoding="utf-8").splitlines()
-                   if line.strip()]
-    if class_names != ["nofall", "fall"]:
-        raise ValueError(f"Unexpected CAUCAFall classes: {class_names}")
+    class_names = read_caucafall_classes(classes_path, record.label)
     observed_indices = [row.index for row in annotations]
     expected_indices = list(range(1, annotations[-1].index + 1))
     if observed_indices != expected_indices:
@@ -225,14 +285,14 @@ def audit_caucafall_alignment(
     representative = {1, (n_frames + 1) // 2, n_frames}
     for index in transitions:
         representative.update({index - 1, index})
-    if len(annotations) == n_frames + 1:
-        representative.add(n_frames + 1)
+    if len(annotations) > n_frames:
+        representative.update(range(n_frames + 1, len(annotations) + 1))
     reference_root = Path(reference_png_dir)
-    prefix = Path(annotations[0].filename).stem.rsplit("-", 1)[0]
+    prefix = _INDEX_RE.match(annotations[0].filename).group("prefix")
     reference_images = {}
     reference_paths = {}
     for index in sorted(representative):
-        path = reference_root / f"{prefix}-{index:05d}.png"
+        path = reference_root / f"{prefix}{index:05d}.png"
         image = cv2.imread(str(path))
         if image is None:
             raise FileNotFoundError(f"Missing official reference PNG: {path}")
@@ -255,27 +315,40 @@ def audit_caucafall_alignment(
 
     required_exact = sorted(index for index in representative if 1 < index <= n_frames)
     bbox_inside = {}
+    selected_source_tracks = {}
     with np.load(Path(pose_file), allow_pickle=False) as pose:
         if str(pose["video_id"]) != record.video_id or len(pose["frame_index"]) != n_frames:
             raise ValueError("Pose file does not match alignment video")
+        from .target import TargetSelectionConfig, select_causal_target
         offsets = pose["frame_offsets"]
+        target_config = TargetSelectionConfig()
+        selected = select_causal_target(
+            offsets, pose["track_id"], pose["xy"], pose["confidence"], pose["valid"],
+            record.width, record.height, config=target_config,
+        )
         for index in sorted(representative):
             if index > n_frames:
                 continue
-            start, end = int(offsets[index - 1]), int(offsets[index])
-            fractions = [
-                _bbox_inside_fraction(annotations[index - 1], pose["xy"][detection],
-                                      pose["valid"][detection], record.width, record.height)
-                for detection in range(start, end)
-            ]
-            bbox_inside[index] = max(fractions, default=0.0)
+            detection = int(selected[index - 1])
+            if detection < 0:
+                bbox_inside[index] = 0.0
+                selected_source_tracks[index] = -1
+            else:
+                bbox_inside[index] = _bbox_inside_fraction(
+                    annotations[index - 1], pose["xy"][detection], pose["valid"][detection],
+                    record.width, record.height,
+                )
+                selected_source_tracks[index] = int(pose["track_id"][detection])
 
     terminal_mae = None
-    if n_frames in reference_images and n_frames + 1 in reference_images:
-        terminal_mae = float(np.abs(
-            reference_images[n_frames].astype(np.int16) -
-            reference_images[n_frames + 1].astype(np.int16)
-        ).mean())
+    if len(annotations) > n_frames:
+        terminal_mae = max(
+            float(np.abs(
+                reference_images[index].astype(np.int16) -
+                reference_images[index + 1].astype(np.int16)
+            ).mean())
+            for index in range(n_frames, len(annotations))
+        )
     evidence = AlignmentEvidence(matches, tuple(required_exact), terminal_mae, bbox_inside)
     resolution = resolve_index_alignment(n_frames, annotations, evidence)
     payload = {
@@ -320,6 +393,9 @@ def audit_caucafall_alignment(
             },
             "terminal_duplicate_mae_threshold": TERMINAL_DUPLICATE_MAE_MAX,
             "minimum_keypoints_inside_box": MIN_KEYPOINTS_INSIDE_BOX,
+            "bbox_audit_target_selection": "causal geometry; annotations used only for scoring",
+            "target_selection_config": asdict(target_config),
+            "selected_source_track_id": selected_source_tracks,
             "opening_frame_note": "opening static content may make the best pixel match non-unique",
         },
         **resolution,

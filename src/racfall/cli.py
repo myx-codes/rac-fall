@@ -58,6 +58,7 @@ def main():
     sequences.add_argument("--window-frames", type=int, default=30)
     sequences.add_argument("--stride-frames", type=int, default=15)
     sequences.add_argument("--alignment-dir", help="Verified per-video annotation-alignment JSON directory")
+    sequences.add_argument("--min-track-coverage", type=float, default=0.5)
     align = command.add_parser(
         "align-caucafall-annotations",
         help="Validate CAUCAFall TXT/PNG/video alignment and write fail-closed provenance",
@@ -132,6 +133,7 @@ def main():
             read_manifest(args.manifest), args.pose_dir, args.output,
             window_frames=args.window_frames, stride_frames=args.stride_frames,
             alignment_dir=args.alignment_dir,
+            min_track_coverage=args.min_track_coverage,
         )
         print(json.dumps(result, indent=2))
     elif args.command == "align-caucafall-annotations":
@@ -150,7 +152,11 @@ def main():
             )
             results.append({
                 "video_id": row.video_id, "status": payload["status"],
-                "quarantined_annotations": payload["quarantined_annotations"],
+                "quarantined_annotation_count": len(payload["quarantined_annotations"]),
+                "quarantined_annotations": (
+                    payload["quarantined_annotations"]
+                    if len(payload["quarantined_annotations"]) <= 10 else None
+                ),
             })
         print(json.dumps({"processed": len(results), "results": results}, indent=2))
 

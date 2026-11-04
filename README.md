@@ -44,6 +44,8 @@ The live command processes frames only in memory: it does not save raw frames, s
 
 Phase 2B adds strict CAUCAFall-video and URFD-RGB-sequence adapters, provenance manifests, reproducible subject splits, tracked pose extraction, normalization, causal windows, and PyTorch loaders. Raw datasets and generated `.npz` files must remain outside Git. GMDCSA-24 is locked against pose extraction and development use.
 
+Phase 2B.3 re-audited six real CAUCAFall videos across six subjects with fail-closed causal target selection. Three pass the combined alignment/pose-correspondence gate and three remain quarantined, so full preprocessing is not authorized. The full 8.33 GB archive has not been downloaded. Subjects 3 and 5 were exposed during development audit and are explicitly barred from being represented as an untouched internal test set.
+
 ```bash
 racfall manifest-caucafall --root /external/CAUCAFall --label-map /external/caucafall_labels.json --output /external/manifests/caucafall.csv
 racfall split-caucafall --manifest /external/manifests/caucafall.csv --output /external/manifests/caucafall_split.csv --assignment-output /external/manifests/caucafall_split.json
@@ -67,6 +69,7 @@ See `docs/PHASE_2B_REPORT.md` for the audited source facts, full CLI workflow, s
 - `docs/MASTER_PLAN_V1.md` — user-provided original master plan.
 - `docs/SPRINT_01_REPORT.md` — implemented vs not validated.
 - `docs/PHASE_2B_REPORT.md` — dataset audit, preprocessing implementation and pilot gate.
+- `docs/FALL_EVENT_ANNOTATION_PROTOCOL.md` — proposed human-review protocol for initiation, contact and recovery landmarks.
 
 ## Evaluation CSV contract
 

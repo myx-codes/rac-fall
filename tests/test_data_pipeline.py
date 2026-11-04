@@ -11,13 +11,16 @@ from racfall.data.alignment import (
     AlignmentEvidence,
     FrameAnnotation,
     SCHEMA_VERSION as ALIGNMENT_SCHEMA_VERSION,
+    audit_monotonic_source_skips,
+    read_caucafall_classes,
     read_frame_annotations,
     resolve_index_alignment,
 )
 from racfall.data.manifest import ManifestRecord, read_manifest, validate_manifest, write_manifest
 from racfall.data.pose import PoseExtractor
 from racfall.data.sequences import build_windows, normalize_pose, validate_window_leakage
-from racfall.data.splits import assign_subject_splits
+from racfall.data.splits import assign_subject_ids, assign_subject_splits
+from racfall.data.target import assess_pose_quality, select_causal_target
 from racfall.data.torch_data import PoseWindowDataset, make_dataloader
 
 
@@ -57,6 +60,15 @@ def test_reproducible_caucafall_622_split():
     assert {key: len(assignment[key]) for key in ("train", "val", "test")} == {
         "train": 6, "val": 2, "test": 2,
     }
+    assert assign_subject_ids(reversed([f"S{i:02d}" for i in range(1, 11)]), seed=7) == {
+        key: assignment[key] for key in ("seed", "algorithm", "train", "val", "test")
+    }
+    assert assignment["distribution"]["train"]["records"] == 6
+
+
+def test_development_exposed_subjects_cannot_remain_in_internal_test():
+    with pytest.raises(ValueError, match="Development-exposed subjects"):
+        assign_subject_ids([f"Subject.{i}" for i in range(1, 11)], seed=20261104)
 
 
 def test_urfd_zip_adapter_uses_sync_timestamps_and_unknown_subject(tmp_path):
@@ -121,6 +133,7 @@ def test_pose_extract_normalize_windows_and_torch_loader(tmp_path):
     assert tuple(sample["features"].shape) == (2, 51)
     assert tuple(sample["valid"].shape) == (2, 17)
     assert sample["label"].item() == 0
+    assert sample["track_coverage"].item() == pytest.approx(1.0)
     loader = make_dataloader(windows_path, split="train", batch_size=2, shuffle=False)
     assert next(iter(loader))["features"].shape[0] == 2
     dataset.close()
@@ -175,6 +188,31 @@ def test_terminal_extra_requires_verified_unshifted_alignment():
     assert exact_without_evidence["sequence_quarantined"]
     assert exact_without_evidence["frame_labels"] == [-1] * 5
 
+    two_extras = rows + [annotation(7, 1)]
+    two_extra_evidence = replace(
+        evidence, representative_best_matches={3: 3, 4: 4, 5: 5, 6: 5, 7: 5},
+    )
+    verified_two = resolve_index_alignment(5, two_extras, two_extra_evidence)
+    assert verified_two["status"] == "verified_terminal_extras"
+    assert verified_two["quarantined_annotations"] == [6, 7]
+
+    moving_terminal = replace(two_extra_evidence, terminal_pair_mae=1.01)
+    assert resolve_index_alignment(5, two_extras, moving_terminal)["sequence_quarantined"]
+
+
+def test_monotonic_alignment_reports_duplicate_frame_ambiguity_without_shifting():
+    # Two identical source rows can be skipped at equal cost; neither is silently chosen.
+    costs = np.asarray([
+        [0.0, 9.0, 9.0],
+        [9.0, 0.0, 9.0],
+        [9.0, 0.0, 9.0],
+        [9.0, 9.0, 0.0],
+    ])
+    audit = audit_monotonic_source_skips(costs)
+    assert audit["ambiguous"]
+    assert audit["exact_best_candidate_count"] == 2
+    assert [row["skipped_source_indices"] for row in audit["candidates"][:2]] == [[2], [3]]
+
 
 def test_alignment_quarantines_missing_or_ambiguous_labels(tmp_path):
     annotation_dir = tmp_path / "annotations"
@@ -187,6 +225,21 @@ def test_alignment_quarantines_missing_or_ambiguous_labels(tmp_path):
     unsupported = resolve_index_alignment(5, [annotation(i) for i in range(1, 8)], None)
     assert unsupported["sequence_quarantined"]
     assert unsupported["quarantined_annotations"] == list(range(1, 8))
+
+
+def test_caucafall_annotation_names_allow_official_dashless_variant(tmp_path):
+    annotation_dir = tmp_path / "annotations"
+    annotation_dir.mkdir()
+    (annotation_dir / "cas200001.txt").write_text("0 0.5 0.5 0.5 0.8\n", encoding="utf-8")
+    (annotation_dir / "cas200002.txt").write_text("1 0.5 0.5 0.5 0.8\n", encoding="utf-8")
+    rows = read_frame_annotations(annotation_dir)
+    assert [row.index for row in rows] == [1, 2]
+    assert [row.filename for row in rows] == ["cas200001.txt", "cas200002.txt"]
+    classes = annotation_dir / "classes.txt"
+    classes.write_text("nofall\n", encoding="utf-8")
+    assert read_caucafall_classes(classes, "non_fall") == ["nofall"]
+    with pytest.raises(ValueError, match="Unexpected"):
+        read_caucafall_classes(classes, "fall")
 
 
 def test_verified_ground_state_labels_are_causal_and_keep_unknown(tmp_path):
@@ -230,6 +283,81 @@ def test_verified_ground_state_labels_are_causal_and_keep_unknown(tmp_path):
         assert data["labels"].tolist() == [0, 1, -1, 1]
         assert data["event_labels"].tolist() == [-1, -1, -1, -1]
         assert str(data["label_semantics"]) == "ground_state_at_causal_window_endpoint"
+
+
+def test_sparse_tracks_do_not_create_mostly_empty_training_windows(tmp_path):
+    row = record(video="sparse", split="train", label="non_fall", frame_count=4, end_timestamp_s=2.0)
+    pose_dir = tmp_path / "poses"
+    pose_dir.mkdir()
+    xy = np.ones((1, 17, 2), dtype=np.float32)
+    with (pose_dir / "sparse.npz").open("wb") as handle:
+        np.savez_compressed(
+            handle, schema_version=np.asarray("racfall.pose.v1"), video_id=np.asarray("sparse"),
+            frame_index=np.arange(4, dtype=np.int32), timestamp_s=np.arange(4) / 2.0,
+            frame_offsets=np.asarray([0, 1, 1, 1, 1]), track_id=np.asarray([9]),
+            xy=xy, confidence=np.ones((1, 17), dtype=np.float32),
+            valid=np.ones((1, 17), dtype=np.bool_),
+        )
+    with pytest.raises(ValueError, match="No complete tracked pose windows"):
+        build_windows([row], pose_dir, tmp_path / "none.npz", window_frames=4, stride_frames=1)
+    summary = build_windows(
+        [row], pose_dir, tmp_path / "qa.npz", window_frames=4, stride_frames=1,
+        min_track_coverage=0.0,
+    )
+    assert summary["windows"] == 1
+    assert summary["skipped_low_coverage_windows"] == 0
+
+
+def test_causal_target_selection_stitches_nearby_ids_and_rejects_far_person():
+    def pose_at(center_x, center_y, scale):
+        offsets = np.linspace(-scale / 2, scale / 2, 17, dtype=np.float32)
+        return np.column_stack((center_x + offsets, center_y + offsets))
+
+    xy = np.asarray([
+        pose_at(100, 200, 40),
+        pose_at(105, 202, 42),
+        pose_at(300, 100, 30),
+        pose_at(302, 102, 30),
+    ], dtype=np.float32)
+    selected = select_causal_target(
+        np.asarray([0, 1, 3, 4]), np.asarray([1, 2, 9, 9]), xy,
+        np.full((4, 17), 0.9, dtype=np.float32), np.ones((4, 17), dtype=np.bool_),
+        720, 480,
+    )
+    assert selected.tolist() == [0, 1, -1]
+    repeated = select_causal_target(
+        np.asarray([0, 1, 3, 4]), np.asarray([1, 2, 9, 9]), xy,
+        np.full((4, 17), 0.9, dtype=np.float32), np.ones((4, 17), dtype=np.bool_),
+        720, 480,
+    )
+    assert repeated.tolist() == selected.tolist()
+
+
+def test_target_selection_rejects_anonymous_takeover_and_long_gap():
+    xy = np.asarray([
+        np.column_stack((np.arange(17) + 100, np.arange(17) + 100)),
+        np.column_stack((np.arange(17) + 102, np.arange(17) + 102)),
+        np.column_stack((np.arange(17) + 300, np.arange(17) + 300)),
+    ], dtype=np.float32)
+    confidence = np.full((3, 17), 0.9, dtype=np.float32)
+    valid = np.ones((3, 17), dtype=np.bool_)
+    # Detection 1 is anonymous after a tracked identity. Detection 2 arrives
+    # beyond the fail-closed 20-frame reacquisition interval.
+    offsets = np.zeros(23, dtype=np.int64)
+    offsets[1:22] = 1
+    offsets[22] = 3
+    selected = select_causal_target(
+        offsets, np.asarray([1, -1, 2]), xy, confidence, valid, 720, 480,
+    )
+    assert selected[0] == 0
+    assert selected[-1] == -1
+    assert np.count_nonzero(selected >= 0) == 1
+
+    low = assess_pose_quality(xy[0], np.zeros(17, dtype=np.float32), valid[0])
+    assert low == {
+        "valid_keypoints": 0, "missing_keypoints": 17,
+        "mean_confidence": 0.0, "spatial_scale_px": 0.0,
+    }
 
 
 def test_normalization_and_window_leakage_guards():
