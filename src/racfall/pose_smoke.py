@@ -27,13 +27,37 @@ def pose_smoke(source: str, max_frames: int = 50, device: str = "auto", imgsz: i
     n_frames = 0
     n_pose_detections = 0
     started = time.perf_counter()
-    for result in model.predict(source=source_arg, stream=True, device=selected,
-                                imgsz=imgsz, verbose=False, save=False, show=False):
-        n_frames += 1
-        if result.keypoints is not None:
-            n_pose_detections += len(result.keypoints.xy)
-        if n_frames >= max_frames:
-            break
+
+    if isinstance(source_arg, int):
+        import cv2
+        cap = cv2.VideoCapture(source_arg, cv2.CAP_AVFOUNDATION)
+        if not cap.isOpened():
+            raise RuntimeError("Camera could not be opened")
+        try:
+            while n_frames < max_frames:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                results = model.predict(
+                    frame, device=selected, imgsz=imgsz,
+                    verbose=False, save=False, show=False
+                )
+                for result in results:
+                    if result.keypoints is not None:
+                        n_pose_detections += len(result.keypoints.xy)
+                n_frames += 1
+        finally:
+            cap.release()
+    else:
+        for result in model.predict(
+            source=source_arg, stream=True, device=selected,
+            imgsz=imgsz, verbose=False, save=False, show=False
+        ):
+            n_frames += 1
+            if result.keypoints is not None:
+                n_pose_detections += len(result.keypoints.xy)
+            if n_frames >= max_frames:
+                break
     seconds = time.perf_counter() - started
     return {
         "model": "yolo26n-pose.pt", "selected_device": selected,
