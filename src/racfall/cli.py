@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 from .env import print_diagnostic
 from .evaluation.events import evaluate, read_alerts, read_events, read_manifest
@@ -26,6 +27,36 @@ def main():
     live.add_argument("--source", default="0", help="Webcam index (default: 0)")
     live.add_argument("--device", choices=["auto", "mps", "cpu"], default="mps")
     live.add_argument("--imgsz", type=int, default=416)
+    manifest_cauca = command.add_parser("manifest-caucafall", help="Audit CAUCAFall videos into a strict manifest")
+    manifest_cauca.add_argument("--root", required=True)
+    manifest_cauca.add_argument("--label-map", required=True, help="Reviewed JSON mapping activity folders to fall/non_fall")
+    manifest_cauca.add_argument("--output", required=True)
+    manifest_cauca.add_argument("--skip-sha256", action="store_true")
+    manifest_urfd = command.add_parser("manifest-urfd", help="Audit URFD RGB sequences into a strict manifest")
+    manifest_urfd.add_argument("--root", required=True)
+    manifest_urfd.add_argument("--output", required=True)
+    manifest_urfd.add_argument("--skip-sha256", action="store_true")
+    validate_data = command.add_parser("validate-dataset-manifest", help="Validate Phase 2B manifest and leakage rules")
+    validate_data.add_argument("--manifest", required=True)
+    split_cauca = command.add_parser("split-caucafall", help="Create reproducible 6/2/2 subject splits")
+    split_cauca.add_argument("--manifest", required=True)
+    split_cauca.add_argument("--output", required=True)
+    split_cauca.add_argument("--assignment-output", required=True)
+    split_cauca.add_argument("--seed", type=int, default=20261104)
+    extract = command.add_parser("extract-poses", help="Extract tracked COCO poses to compact NPZ files")
+    extract.add_argument("--manifest", required=True)
+    extract.add_argument("--dataset-root", required=True)
+    extract.add_argument("--output-dir", required=True)
+    extract.add_argument("--device", choices=["mps", "cpu"], default="mps")
+    extract.add_argument("--imgsz", type=int, default=416)
+    extract.add_argument("--confidence", type=float, default=0.25)
+    extract.add_argument("--limit", type=int, help="Pilot limit; omitted means all manifest records")
+    sequences = command.add_parser("build-pose-sequences", help="Normalize poses and generate causal windows")
+    sequences.add_argument("--manifest", required=True)
+    sequences.add_argument("--pose-dir", required=True)
+    sequences.add_argument("--output", required=True)
+    sequences.add_argument("--window-frames", type=int, default=30)
+    sequences.add_argument("--stride-frames", type=int, default=15)
     args = parser.parse_args()
     if args.command == "env-check":
         print_diagnostic()
@@ -41,6 +72,56 @@ def main():
     elif args.command == "pose-live":
         from .pose_live import pose_live
         print(json.dumps(pose_live(args.source, args.imgsz, args.device), indent=2))
+    elif args.command == "manifest-caucafall":
+        from .data.adapters import CAUCAFallAdapter, load_label_map
+        from .data.manifest import write_manifest
+        records = CAUCAFallAdapter(
+            args.root, load_label_map(args.label_map), hash_sources=not args.skip_sha256,
+        ).scan()
+        write_manifest(records, args.output)
+        print(json.dumps({"records": len(records), "output": args.output}, indent=2))
+    elif args.command == "manifest-urfd":
+        from .data.adapters import URFDRGBAdapter
+        from .data.manifest import write_manifest
+        records = URFDRGBAdapter(args.root, hash_sources=not args.skip_sha256).scan()
+        write_manifest(records, args.output)
+        print(json.dumps({"records": len(records), "output": args.output}, indent=2))
+    elif args.command == "validate-dataset-manifest":
+        from .data.manifest import read_manifest, validate_manifest
+        print(json.dumps(validate_manifest(read_manifest(args.manifest)), indent=2))
+    elif args.command == "split-caucafall":
+        from .data.manifest import read_manifest, write_manifest
+        from .data.splits import assign_subject_splits
+        records, assignment = assign_subject_splits(read_manifest(args.manifest), seed=args.seed)
+        write_manifest(records, args.output)
+        assignment_path = Path(args.assignment_output)
+        assignment_path.parent.mkdir(parents=True, exist_ok=True)
+        assignment_path.write_text(json.dumps(assignment, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps({"records": len(records), "output": args.output, **assignment}, indent=2))
+    elif args.command == "extract-poses":
+        from .data.manifest import read_manifest
+        from .data.pose import PoseExtractor
+        records = read_manifest(args.manifest)
+        if args.limit is not None:
+            if args.limit <= 0:
+                raise ValueError("--limit must be > 0")
+            records = records[:args.limit]
+        extractor = PoseExtractor(
+            device=args.device, imgsz=args.imgsz, confidence_threshold=args.confidence,
+        )
+        output_dir = Path(args.output_dir)
+        results = [extractor.extract(
+            args.dataset_root, record, output_dir / f"{record.video_id}.npz",
+        ) for record in records]
+        print(json.dumps({"processed": len(results), "results": results}, indent=2))
+    elif args.command == "build-pose-sequences":
+        from .data.manifest import read_manifest
+        from .data.sequences import build_windows
+        result = build_windows(
+            read_manifest(args.manifest), args.pose_dir, args.output,
+            window_frames=args.window_frames, stride_frames=args.stride_frames,
+        )
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

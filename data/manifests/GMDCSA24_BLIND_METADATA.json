@@ -1,0 +1,17 @@
+{
+  "dataset": "GMDCSA-24",
+  "version": "v2.1",
+  "doi": "10.5281/zenodo.13354453",
+  "source_url": "https://zenodo.org/records/13354453",
+  "license": "CC BY 4.0",
+  "archive_bytes": 1107545615,
+  "archive_md5": "3d36f2c5c1a666b99639e4e9fd843efb",
+  "published_subject_count": 4,
+  "published_fall_clip_count": 81,
+  "published_adl_clip_count": 79,
+  "annotation_note": "v2.1 CSV files contain classes and class start/end times",
+  "policy": "locked_blind_test",
+  "downloaded": false,
+  "pose_extraction_allowed": false,
+  "training_or_tuning_allowed": false
+}

@@ -40,6 +40,18 @@ racfall pose-live --source 0 --imgsz 416
 
 The live command processes frames only in memory: it does not save raw frames, screenshots, video, keypoints, or tracking data. Camera-open/read failures produce an error, and the camera plus OpenCV windows are released during normal exit and errors. The summary printed after quitting contains aggregate runtime measurements only. This remains pose visualization—not fall detection.
 
+### Dataset preprocessing (Phase 2B)
+
+Phase 2B adds strict CAUCAFall-video and URFD-RGB-sequence adapters, provenance manifests, reproducible subject splits, tracked pose extraction, normalization, causal windows, and PyTorch loaders. Raw datasets and generated `.npz` files must remain outside Git. GMDCSA-24 is locked against pose extraction and development use.
+
+```bash
+racfall manifest-caucafall --root /external/CAUCAFall --label-map /external/caucafall_labels.json --output /external/manifests/caucafall.csv
+racfall split-caucafall --manifest /external/manifests/caucafall.csv --output /external/manifests/caucafall_split.csv --assignment-output /external/manifests/caucafall_split.json
+racfall extract-poses --manifest /external/manifests/caucafall_split.csv --dataset-root /external/CAUCAFall --output-dir /external/poses/pilot --device mps --imgsz 416 --limit 1
+```
+
+See `docs/PHASE_2B_REPORT.md` for the audited source facts, full CLI workflow, schemas, blind-test policy, and unresolved real-data pilot gate. No Phase 3 model training is implemented.
+
 ## Research documents
 
 - `docs/RESEARCH_PROPOSAL.md` — falsifiable hypotheses and target metrics.
@@ -50,6 +62,7 @@ The live command processes frames only in memory: it does not save raw frames, s
 - `docs/ROADMAP.md` — implementation gates and sprint plan.
 - `docs/MASTER_PLAN_V1.md` — user-provided original master plan.
 - `docs/SPRINT_01_REPORT.md` — implemented vs not validated.
+- `docs/PHASE_2B_REPORT.md` — dataset audit, preprocessing implementation and pilot gate.
 
 ## Evaluation CSV contract
 
