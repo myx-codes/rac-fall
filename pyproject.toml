@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-vision = ["ultralytics>=8.4", "opencv-python>=4.8", "torch>=2.2"]
+vision = ["ultralytics>=8.4", "opencv-python>=4.8", "torch>=2.2", "lap>=0.5.12"]
 dev = ["pytest>=8"]
 
 [project.scripts]

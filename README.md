@@ -2,7 +2,7 @@
 
 **Risk-Adaptive Context-Aware Fall Verification**. This is a reproducible research **starter**, not a trained fall detector or medical/safety product.
 
-**Status:** Research proposal, dataset protocols, reference event-level evaluator and optional pretrained pose smoke test are implemented. TCN, scene model, learned RACF, webcam application and full experiments are **not implemented**. No empirical performance claims.
+**Status:** Research proposal, dataset protocols, reference event-level evaluator, pretrained pose smoke test, and a live tracked pose visualizer are implemented. Fall detection, TCN, scene model, learned RACF, and full experiments are **not implemented**. No fall-detection accuracy claims.
 
 ## How to run (macOS Apple Silicon / Python 3.11+)
 
@@ -28,6 +28,17 @@ racfall pose-smoke --source 0 --max-frames 50 --device auto
 ```
 
 YOLO pretrained pose inference only. **No fall detection decisions** are made by this test. Neither raw frames nor keypoints are saved to disk in default mode. Test model throughput and MPS availability on the user's Mac; a Linux runner cannot validate Apple MPS. Model download requires internet on first run.
+
+### Real-time pose visualization (Phase 2A)
+
+```bash
+python -m pip install -e '.[vision,dev]'
+racfall pose-live --source 0 --imgsz 416
+```
+
+`pose-live` opens webcam index 0 with OpenCV's macOS AVFoundation backend and runs `yolo26n-pose.pt` on Apple MPS by default. It draws all 17 COCO keypoints, skeleton connections, persistent ByteTrack IDs, rolling display FPS, model-reported inference latency, and mean keypoint confidence for each pose. Press **P** to pause/resume and **Q** to quit. Use `--device cpu` only when MPS is unavailable.
+
+The live command processes frames only in memory: it does not save raw frames, screenshots, video, keypoints, or tracking data. Camera-open/read failures produce an error, and the camera plus OpenCV windows are released during normal exit and errors. The summary printed after quitting contains aggregate runtime measurements only. This remains pose visualization—not fall detection.
 
 ## Research documents
 

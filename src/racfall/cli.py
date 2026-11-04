@@ -22,6 +22,10 @@ def main():
     smoke.add_argument("--max-frames", type=int, default=50)
     smoke.add_argument("--device", choices=["auto", "mps", "cpu"], default="auto")
     smoke.add_argument("--imgsz", type=int, default=640)
+    live = command.add_parser("pose-live", help="Live tracked pose display (no fall decision or recording)")
+    live.add_argument("--source", default="0", help="Webcam index (default: 0)")
+    live.add_argument("--device", choices=["auto", "mps", "cpu"], default="mps")
+    live.add_argument("--imgsz", type=int, default=416)
     args = parser.parse_args()
     if args.command == "env-check":
         print_diagnostic()
@@ -34,6 +38,9 @@ def main():
     elif args.command == "pose-smoke":
         from .pose_smoke import pose_smoke
         print(json.dumps(pose_smoke(args.source, args.max_frames, args.device, args.imgsz), indent=2))
+    elif args.command == "pose-live":
+        from .pose_live import pose_live
+        print(json.dumps(pose_live(args.source, args.imgsz, args.device), indent=2))
 
 
 if __name__ == "__main__":
