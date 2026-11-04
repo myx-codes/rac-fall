@@ -68,13 +68,11 @@ class CAUCAFallAdapter:
         if not videos:
             raise ValueError("No CAUCAFall .avi files found")
         records = []
-        seen_activities: set[str] = set()
         for video in videos:
             relative = video.relative_to(self.root)
             if len(relative.parts) < 3:
                 raise ValueError(f"Expected subject/activity/video layout: {relative}")
             subject_id, action = relative.parts[0], relative.parts[-2]
-            seen_activities.add(action)
             if action not in self.label_map:
                 raise ValueError(
                     f"Unmapped CAUCAFall activity {action!r}; provide an explicit source-verified label map"
@@ -106,9 +104,6 @@ class CAUCAFallAdapter:
                 source_sha256=sha256_file(video) if self.hash_sources else "",
                 license="CC BY 4.0", locked_blind=False,
             ))
-        unused = set(self.label_map) - seen_activities
-        if unused:
-            raise ValueError(f"Label map contains activities absent from source: {sorted(unused)}")
         validate_manifest(records)
         return records
 

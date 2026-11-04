@@ -145,6 +145,12 @@ def test_normalization_and_window_leakage_guards():
     xy = np.full((17, 2), np.nan, dtype=np.float32)
     normalized, confidence, valid = normalize_pose(xy, np.zeros(17), np.zeros(17, dtype=bool))
     assert np.all(normalized == 0) and not valid.any() and np.all(confidence == 0)
+    collapsed = np.asarray([[0.0, float(i)] for i in range(17)], dtype=np.float32)
+    collapsed[5:7] = [[0.0, 4.0], [0.0, 5.0]]
+    collapsed[11:13] = [[0.0, 4.1], [0.0, 5.1]]
+    stable, _, stable_valid = normalize_pose(collapsed, np.ones(17), np.ones(17, dtype=bool))
+    assert stable_valid.all()
+    assert np.abs(stable).max() <= 4.0
     with pytest.raises(ValueError, match="Subject window leakage"):
         validate_window_leakage([
             {"dataset": "D", "subject_id": "S", "video_id": "a", "split": "train",

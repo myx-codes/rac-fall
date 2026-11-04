@@ -1,0 +1,12 @@
+{
+  "Fall backwards": "fall",
+  "Fall forward": "fall",
+  "Fall left": "fall",
+  "Fall right": "fall",
+  "Fall sitting": "fall",
+  "Hop": "non_fall",
+  "Kneel": "non_fall",
+  "Pick up object": "non_fall",
+  "Sit down": "non_fall",
+  "Walk": "non_fall"
+}

@@ -1,7 +1,7 @@
 # Phase 2B — Dataset Collection & Preprocessing Report
 
 Date: 2026-11-04
-Status: pipeline implemented and synthetic-tested; real CAUCAFall pilot blocked on approved local data access
+Status: pipeline implemented, synthetic-tested, and validated on one real CAUCAFall v5 video; full preprocessing stopped pending review
 
 ## Scope and safeguards
 
@@ -17,8 +17,10 @@ GMDCSA-24 is enforced as a locked blind test: `PoseExtractor` and window generat
 - Published structure: 10 subject directories; each has 10 activity directories (five staged fall directions and five ADLs); each activity directory contains AVI video, PNG frames, and per-frame TXT segmentation labels.
 - Published capture metadata: HIKVISION IR camera, nominal 23 FPS and 1080×960.
 - Published labels distinguish fall/no-fall frames, but the description does not define the losing-balance event onset required by the event evaluator.
-- Local status: no archive or extracted files are present. The Mendeley page is reachable, but its file API returned HTTP 401 without credentials. Archive size, local clip count, checksums, exact directory names, actual container FPS/resolution, and annotation completeness are therefore unresolved.
+- Pilot status: Mendeley's official anonymous public-file endpoint was used for one source video and its TXT annotations. A one-byte range request measured the official Download All archive as 8,326,349,365 bytes before transfer; 158 GiB was available. The full archive was not retained because the official per-file API allowed a minimal pilot download. The generic API endpoint returned HTTP 401 and was not bypassed.
 - Adapter policy: exact top-level directory names become subject IDs; activity labels require an explicit researcher-reviewed JSON map. Unknown folder names fail instead of being guessed.
+
+Manual fallback if the official automatic endpoint returns 401: open the official v5 record above in a browser, use its **Download All** control, sign in only through Mendeley's normal account flow if requested, review the CC BY 4.0 terms, and save the archive under `~/datasets/RAC-Fall/CAUCAFall/`. Do not copy signed URLs, reuse another person's session, or bypass the login. Before extraction, verify the downloaded file is 8,326,349,365 bytes and record its checksum.
 
 ### UR Fall Detection (URFD)
 
@@ -63,7 +65,7 @@ Each per-video compressed NPZ stores:
 - missing/low-confidence coordinates as `NaN` plus `valid=false`;
 - source identity, split, label provenance, image size, inference device, and `imgsz`.
 
-Normalization centers on visible hips, then shoulders, then visible-point mean. Scale uses torso length when available and visible-point extent otherwise. Degenerate/missing poses become zero-valued features with a false mask, never an implicit safe pose.
+Normalization centers on visible hips, then shoulders, then visible-point mean. Scale uses torso length bounded by 25% of visible body extent, or visible-point extent when torso landmarks are missing. Degenerate/missing poses become zero-valued features with a false mask, never an implicit safe pose.
 
 Temporal windows are generated within one video and one track only. They inherit the source subject/video split. A second leakage check rejects subject/sequence reuse or overlapping intervals across different splits. Windows contain 51 features per frame (34 normalized coordinates + 17 confidence values), a separate 17-point validity mask, timestamps, label, video, subject, track, and split. Pure ADL windows receive label `0`. A fall-source window receives `1` only when its causal endpoint lies inside an explicit source/researcher-verified event interval; fall clips without an interval receive `-1` (unknown), not an invented target. PyTorch loaders exclude unknown targets by default but can expose them for annotation/QA.
 
@@ -103,22 +105,54 @@ URFD uses `racfall manifest-urfd --root ... --output ...`; ZIP archives can rema
 
 ## Verification and measured results
 
-- Automated tests: 20 passed; repeated local Python 3.11 runs completed in 0.55–0.83 seconds.
+- Automated tests after the real-pilot normalization fix: 20 passed in 0.75 seconds.
 - Synthetic fixture coverage: manifest round-trip, URFD ZIP decoding and timestamp-derived FPS, 17-keypoint validity masking, compact NPZ output, normalization, temporal windows, leakage rejection, blind-test rejection, PyTorch Dataset, and DataLoader batching.
-- Real CAUCAFall count: not measured (dataset absent).
-- Real CAUCAFall preprocessing errors: not measured (dataset absent).
-- Real CAUCAFall MPS extraction speed: not measured (dataset absent).
-- No accuracy, event boundaries, or model-training result exists in Phase 2B.
+- No accuracy or model-training result exists in Phase 2B.
+
+### Real CAUCAFall v5 one-video pilot
+
+Source and storage:
+
+- Official source only: Mendeley v5 public file `Subject.1/Fall forward/FallForwardS1.avi`.
+- External path: `~/datasets/RAC-Fall/CAUCAFall/`; nothing under this path is tracked by Git.
+- AVI size: 1,193,966 bytes. SHA-256 `fcd0d92864c70999616e22af619b0bbde020496ce94da2b4c5f24c3efb149bdf`, exactly matching Mendeley metadata.
+- Downloaded annotations: 191 frame TXT files (7,258 bytes total) and `classes.txt`. PNG copies were not downloaded. Original files were not modified.
+
+Decode and annotation integrity:
+
+- OpenCV decoded 190 frames at 20 FPS, 720×480, duration 9.5 s.
+- This differs from the dataset page's nominal 23 FPS and 1080×960; container metadata is authoritative for this manifest row.
+- The official folder contains 191 PNG/TXT frame pairs, but the AVI decodes to 190 frames. The extra annotation is `cfs1-00191.txt`; this unresolved off-by-one prevents blindly aligning every annotation to an AVI frame.
+- All 191 TXT files contain exactly one five-field normalized YOLO row. No malformed rows, unknown class IDs, or values outside `[0,1]` were found.
+- `classes.txt` maps class 0 to `nofall` and class 1 to `fall`; counts are 131 and 60 frame annotations respectively. These posture/segmentation classes were not converted into losing-balance onset/end timestamps. Manifest event timestamps remain empty.
+
+Pose extraction (`YOLO26n-Pose`, MPS, `imgsz=416`, ByteTrack):
+
+- 190 frames processed; 188 pose detections; two frames with no detected pose.
+- One stable tracking ID (`1`) covers all 188 detections.
+- Extraction time 2.6827 s; measured pipeline throughput 70.823 FPS; mean model-reported inference latency 3.485 ms.
+- Whole CLI wall time 3.81 s. Maximum resident set size 634,486,784 bytes; peak memory footprint 466,126,264 bytes; zero swaps.
+- 2,818 of 3,196 keypoints are valid at the 0.25 threshold (88.17%). Mean valid confidence 0.8821; minimum 0.2512; maximum 0.9988.
+- Timestamps are strictly increasing from 0.00 to 9.45 s. Invalid coordinates are `NaN` and have `valid=false`.
+- Compressed pose output: 35,876 bytes.
+
+Normalization and temporal windows:
+
+- The first real run exposed a projected-torso scale collapse with maximum absolute normalized coordinate 18.32. Normalization now bounds torso scale by 25% of visible body extent; the rebuilt maximum is 3.57 and all features remain finite.
+- Generated 11 causal windows of 30 frames with stride 15 for the one stable track. Feature shape is `(11, 30, 51)` and validity-mask shape is `(11, 30, 17)`.
+- Missing normalized coordinates are zero only where the explicit mask is false. Window timestamps are strictly increasing.
+- All 11 targets are `-1` (unknown), because no source-verified fall onset/end exists. Default training loaders therefore exclude them; an explicit QA loader produced a `(4, 30, 51)` batch without training.
+- Window generation wall time 0.09 s; maximum resident set size 35,487,744 bytes; zero swaps. Compressed window output: 34,604 bytes.
 
 Synthetic test speed is deliberately not reported as dataset processing performance.
 
 ## Unresolved gate before full preprocessing
 
-1. Obtain approval and sufficient disk space for CAUCAFall v5 outside Git.
-2. Verify archive checksum, extracted 10-subject/100-activity layout, exact activity directory names, and rights/likeness handling.
-3. Review the exact activity-to-label map and generate the frozen 6/2/2 assignment.
-4. Run `extract-poses --limit 1`; record real frame count, decode errors, pose/tracking coverage, MPS FPS, and inference latency.
-5. Inspect annotations on development subjects to define event onset without using the internal test or GMDCSA blind set.
-6. Proceed to full CAUCAFall preprocessing only after the pilot passes.
+1. Resolve or explicitly document the 191 annotation rows versus 190 decoded AVI frames before frame-level annotation alignment.
+2. Decide whether the nominal-vs-container FPS/resolution discrepancy is systematic by auditing additional development videos, without preprocessing the full dataset yet.
+3. Review participant likeness/consent and redistribution handling under CC BY 4.0.
+4. Obtain the remaining official files outside Git, verify the complete 10-subject/100-activity inventory and checksums, then generate the frozen 6/2/2 assignment.
+5. Define and review event onset annotations on development subjects only; do not derive them automatically from `fall` posture labels.
+6. Re-run a small multi-activity development pilot before authorizing full pose extraction.
 
 Phase 3 training is intentionally out of scope and must not start until these gates are resolved.

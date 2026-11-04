@@ -25,13 +25,17 @@ def normalize_pose(xy, confidence, valid):
     else:
         center = xy[usable].mean(axis=0)
 
+    extent = np.ptp(xy[usable], axis=0)
+    body_extent = float(max(extent.max(), 0.0))
     if usable[5] and usable[6] and usable[11] and usable[12]:
         shoulder_mid = (xy[5] + xy[6]) / 2
         hip_mid = (xy[11] + xy[12]) / 2
-        scale = float(np.linalg.norm(shoulder_mid - hip_mid))
+        torso_scale = float(np.linalg.norm(shoulder_mid - hip_mid))
+        # Sideways or occluded poses can collapse the projected torso length.
+        # Bound it by visible body extent to avoid exploding normalized values.
+        scale = max(torso_scale, body_extent * 0.25)
     else:
-        extent = np.ptp(xy[usable], axis=0)
-        scale = float(max(extent.max(), 0.0))
+        scale = body_extent
     if not np.isfinite(scale) or scale < 1e-6:
         usable[:] = False
         return normalized, np.nan_to_num(confidence, nan=0.0), usable
