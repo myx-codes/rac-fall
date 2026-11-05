@@ -359,3 +359,59 @@ Remaining blockers are:
 5. PNGs have no independent source timestamps, so AVI FPS remains a timing-rate proxy rather than index alignment;
 6. participant likeness/consent and redistribution handling still require project review;
 7. Subjects 9/10 must remain sealed until the frozen internal evaluation.
+
+## Phase 2B.5 controlled train/validation preparation
+
+Status on 2026-11-06: **stopped at the canonical alignment gate; no pose preprocessing or training was run**.
+
+### Official download and integrity
+
+Only the official CAUCAFall v5 Mendeley `public-files` endpoints were used. The approved preflight inventory contained 30,820 PNG/TXT files totaling 6,137,241,092 bytes. Of these, 1,166 files were already present and verified, 219 could be reused by exact official size and SHA-256, and 29,435 files totaling 6,072,582,576 bytes required network transfer. Downloading was resumable, limited to Subjects 1–8, used bounded retries, processed subjects sequentially, and retained `.partial` files until verification and atomic rename.
+
+The completed global reconciliation found exactly 30,820/30,820 files and 6,137,241,092/6,137,241,092 bytes at their final paths with official size and SHA-256 matches; no `.partial` files remained. The resumed run took 3,097.888985 seconds. Its ledger recorded 29,122 newly downloaded files/5,994,253,069 bytes, while files completed before the controlled restart were recognized as already verified. Final free space was 161,310,478,336 bytes at download completion, well above the 2 GiB reserve (later filesystem activity may change this value). Raw and generated data remain outside Git. Original files were not modified.
+
+| Subject | Official files | Official bytes | Resumed-run elapsed (s) |
+|---|---:|---:|---:|
+| 1 | 3,318 | 695,911,387 | 286.047671 |
+| 2 | 2,952 | 622,197,881 | 323.079101 |
+| 3 | 3,850 | 949,381,739 | 364.418247 |
+| 4 | 3,738 | 850,519,259 | 406.614626 |
+| 5 | 4,423 | 895,464,345 | 376.295983 |
+| 6 | 4,373 | 678,937,706 | 428.496962 |
+| 7 | 3,906 | 838,358,421 | 484.931180 |
+| 8 | 4,260 | 606,470,354 | 427.995597 |
+
+### Frozen split and exposure
+
+The manifest contains 80 sequences and 15,371 canonical PNG frames. The frozen train/validation-only assignment is 60 train sequences (Subjects 1, 2, 4, 5, 6, 8; 30 fall activities and 30 ADL activities) and 20 validation sequences (Subjects 3, 7; 10 fall activities and 10 ADL activities). Subjects 9 and 10 were not downloaded or included in the manifest. GMDCSA-24 was not accessed.
+
+Subjects 3 and 5 were already exposed during Phase 2B.2/2B.3 development auditing. Subject 3 is therefore a development validation subject, not an untouched test subject; Subject 5 remains in training. The sealed internal test remains Subjects 9 and 10.
+
+### Canonical annotation gate and stop decision
+
+The all-sequence PNG/TXT audit produced 75 `verified`, three `verified_with_invalid_labels`, and two `quarantined` sequences. Across all source sequences there are 14,970 valid ground-state labels and 401 unknown labels after fail-closed quarantine. Confirmed findings are:
+
+- `Subject.1/Sit down`: both PNG and TXT index 148 are absent between paired indices 147 and 149. The official files that do exist match their published checksums. All 188 frames in this sequence are quarantined as unknown.
+- `Subject.5/Kneel`: paired indices 1–209 are followed by PNG index 236; PNG indices 210–235 are absent and TXT index 236 is absent. All 210 frames are quarantined as unknown.
+- `Subject.6/Walk`: TXT index 260 is absent; the one corresponding frame label remains unknown while the sequence is otherwise verified.
+- `Subject.8/Hop`: canonical TXT index 96 is absent; the one corresponding frame label remains unknown. A differently named annotation is not silently substituted.
+- `Subject.8/Pick up object`: canonical TXT index 90 is absent; the one corresponding frame label remains unknown. A differently named annotation is not silently substituted.
+
+| Subject | Sequence status | Frames | Valid labels | Unknown labels | Ground state 0 | Ground state 1 |
+|---|---|---:|---:|---:|---:|---:|
+| 1 | 9 verified, 1 quarantined | 1,654 | 1,466 | 188 | 1,151 | 315 |
+| 2 | 10 verified | 1,471 | 1,471 | 0 | 1,061 | 410 |
+| 3 | 10 verified | 1,920 | 1,920 | 0 | 1,360 | 560 |
+| 4 | 10 verified | 1,864 | 1,864 | 0 | 1,253 | 611 |
+| 5 | 9 verified, 1 quarantined | 2,207 | 1,997 | 210 | 1,209 | 788 |
+| 6 | 9 verified, 1 verified-with-invalid | 2,182 | 2,181 | 1 | 1,425 | 756 |
+| 7 | 10 verified | 1,948 | 1,948 | 0 | 1,245 | 703 |
+| 8 | 8 verified, 2 verified-with-invalid | 2,125 | 2,123 | 2 | 1,419 | 704 |
+
+This is an official-inventory alignment problem, not a download corruption: the complete local inventory matches official sizes and SHA-256 values. No index shift, relabeling, timestamp invention, or repair was applied. Because the user required stopping on critical data integrity or alignment failures, MPS pose extraction, per-subject pose metrics, temporal windows, DataLoader readiness measurements, and Phase 3 training readiness were not produced. Proceeding would require an explicit protocol decision to exclude the two quarantined sequences and continue with the 78 remaining sequences; it must not reinterpret their missing indices.
+
+### Implementation and automated verification
+
+The CLI now supports official inventory planning/downloading, PNG-only canonical manifests with an explicit frozen ordinal timing proxy, and the frozen train/validation split while sealed Subjects 9/10 remain absent. The downloader rejects non-official URLs, verifies official size/SHA-256, resumes `.partial` transfers, bounds retries, reuses only checksum-identical local files, checks disk capacity, and fails rather than overwriting a mismatched target. Canonical source hashes exclude secondary AVI data but include the immutable PNG/TXT source.
+
+The suite has 39 passing tests. Added regression coverage includes official URL/inventory validation, exact checksum reuse, target mismatch refusal, PNG-only timing provenance, canonical hash scope, frozen train/validation isolation, and fail-closed quarantine when both PNG and TXT share an otherwise-hidden index gap.

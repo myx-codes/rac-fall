@@ -34,6 +34,24 @@ def sha256_tree(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_canonical_tree(path: Path) -> str:
+    """Hash only immutable canonical PNG/TXT names and bytes."""
+    digest = hashlib.sha256()
+    items = sorted(
+        child for child in path.iterdir()
+        if child.is_file() and child.suffix.lower() in {".png", ".txt"}
+    )
+    if not items:
+        raise ValueError(f"No canonical PNG/TXT files in {path}")
+    for item in items:
+        digest.update(item.name.encode("utf-8"))
+        digest.update(b"\0")
+        with item.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _safe_id(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
 
@@ -111,10 +129,16 @@ class CAUCAFallAdapter:
 class CAUCAFallCanonicalAdapter:
     """Inspect official PNG sequences; AVI supplies timing rate only."""
 
-    def __init__(self, root: str | Path, label_map: dict[str, str], *, hash_sources: bool = True):
+    def __init__(
+        self, root: str | Path, label_map: dict[str, str], *, hash_sources: bool = True,
+        timing_fps: float | None = None,
+    ):
         self.root = Path(root).resolve()
         self.label_map = label_map
         self.hash_sources = hash_sources
+        self.timing_fps = timing_fps
+        if timing_fps is not None and (not math.isfinite(timing_fps) or timing_fps <= 0):
+            raise ValueError("timing_fps must be positive and finite")
 
     def scan(self) -> list[ManifestRecord]:
         if not self.root.is_dir():
@@ -138,17 +162,31 @@ class CAUCAFallCanonicalAdapter:
                 raise ValueError(f"Cannot decode canonical PNG: {pngs[0][2]}")
             height, width = map(int, first.shape[:2])
             avis = sorted(directory.glob("*.avi"))
-            if len(avis) != 1:
-                raise ValueError(f"Expected exactly one secondary AVI in {relative}, found {len(avis)}")
-            capture = cv2.VideoCapture(str(avis[0]))
-            try:
-                if not capture.isOpened():
-                    raise ValueError(f"Cannot open secondary AVI: {avis[0]}")
-                fps = float(capture.get(cv2.CAP_PROP_FPS))
-            finally:
-                capture.release()
+            if len(avis) == 1:
+                capture = cv2.VideoCapture(str(avis[0]))
+                try:
+                    if not capture.isOpened():
+                        raise ValueError(f"Cannot open secondary AVI: {avis[0]}")
+                    fps = float(capture.get(cv2.CAP_PROP_FPS))
+                finally:
+                    capture.release()
+                timing_source = (
+                    f"canonical PNG ordinal / secondary AVI {avis[0].name} container FPS; "
+                    "no AVI frame-index equivalence"
+                )
+            elif len(avis) == 0 and self.timing_fps is not None:
+                fps = self.timing_fps
+                timing_source = (
+                    f"canonical PNG ordinal / frozen {fps:g} FPS development proxy; "
+                    "no per-sequence AVI downloaded and no AVI frame-index equivalence"
+                )
+            else:
+                raise ValueError(
+                    f"Expected one secondary AVI or explicit timing_fps in {relative}, "
+                    f"found {len(avis)} AVI files"
+                )
             if not math.isfinite(fps) or fps <= 0:
-                raise ValueError(f"Invalid secondary AVI FPS: {avis[0]}")
+                raise ValueError(f"Invalid canonical timing FPS in {relative}")
             sequence_id = f"caucafall-{_safe_id(relative.as_posix())}"
             records.append(ManifestRecord(
                 dataset="CAUCAFall", dataset_version="v5", subject_id=subject_id,
@@ -160,13 +198,10 @@ class CAUCAFallCanonicalAdapter:
                     "same-index official PNG/TXT ground-state label; missing TXT remains unknown; "
                     "no event boundary"
                 ),
-                timestamp_source=(
-                    f"canonical PNG ordinal / secondary AVI {avis[0].name} container FPS; "
-                    "no AVI frame-index equivalence"
-                ),
+                timestamp_source=timing_source,
                 start_timestamp_s=0.0, end_timestamp_s=len(pngs) / fps, fps=fps,
                 width=width, height=height, frame_count=len(pngs), split="",
-                source_sha256=sha256_tree(directory) if self.hash_sources else "",
+                source_sha256=sha256_canonical_tree(directory) if self.hash_sources else "",
                 license="CC BY 4.0", locked_blind=False,
             ))
         validate_manifest(records)

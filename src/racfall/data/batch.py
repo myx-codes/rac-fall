@@ -10,7 +10,7 @@ import shutil
 import time
 from typing import Iterable
 
-from .adapters import sha256_file, sha256_tree
+from .adapters import sha256_canonical_tree, sha256_file, sha256_tree
 from .canonical import assess_sequence_quality
 from .manifest import ManifestRecord, validate_manifest
 from .pose import PoseExtractor
@@ -40,6 +40,8 @@ def _source_checksum(root: Path, record: ManifestRecord) -> str:
     if source.is_file():
         return sha256_file(source)
     if source.is_dir():
+        if record.dataset == "CAUCAFall" and record.source_type == "image_sequence_dir":
+            return sha256_canonical_tree(source)
         return sha256_tree(source)
     raise FileNotFoundError(f"Missing source: {source}")
 

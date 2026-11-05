@@ -39,6 +39,10 @@ def main():
     manifest_cauca_png.add_argument("--label-map", required=True)
     manifest_cauca_png.add_argument("--output", required=True)
     manifest_cauca_png.add_argument("--skip-sha256", action="store_true")
+    manifest_cauca_png.add_argument(
+        "--timing-fps", type=float,
+        help="Frozen ordinal timing proxy when secondary AVIs are intentionally absent",
+    )
     manifest_urfd = command.add_parser("manifest-urfd", help="Audit URFD RGB sequences into a strict manifest")
     manifest_urfd.add_argument("--root", required=True)
     manifest_urfd.add_argument("--output", required=True)
@@ -56,6 +60,26 @@ def main():
     frozen_split.add_argument("--manifest", required=True)
     frozen_split.add_argument("--output", required=True)
     frozen_split.add_argument("--assignment-output", required=True)
+    trainval_split = command.add_parser(
+        "split-caucafall-trainval-frozen",
+        help="Apply Phase 2B.5 train/validation split while sealed Subjects 9/10 stay absent",
+    )
+    trainval_split.add_argument("--manifest", required=True)
+    trainval_split.add_argument("--output", required=True)
+    trainval_split.add_argument("--assignment-output", required=True)
+    download = command.add_parser(
+        "download-caucafall-canonical", help="Download official CAUCAFall PNG/TXT files",
+    )
+    download.add_argument("--folders-json", required=True)
+    download.add_argument("--metadata-dir", required=True)
+    download.add_argument("--dataset-root", required=True)
+    download.add_argument("--reuse-root", required=True)
+    download.add_argument("--report-dir", required=True)
+    download.add_argument("--workers", type=int, default=8)
+    download.add_argument("--retries", type=int, default=3)
+    download.add_argument("--timeout-s", type=float, default=120.0)
+    download.add_argument("--min-free-bytes", type=int, default=2 * 1024 ** 3)
+    download.add_argument("--plan-only", action="store_true")
     extract = command.add_parser("extract-poses", help="Extract tracked COCO poses to compact NPZ files")
     extract.add_argument("--manifest", required=True)
     extract.add_argument("--dataset-root", required=True)
@@ -148,6 +172,7 @@ def main():
         from .data.manifest import write_manifest
         records = CAUCAFallCanonicalAdapter(
             args.root, load_label_map(args.label_map), hash_sources=not args.skip_sha256,
+            timing_fps=args.timing_fps,
         ).scan()
         write_manifest(records, args.output)
         print(json.dumps({"records": len(records), "output": args.output}, indent=2))
@@ -178,6 +203,29 @@ def main():
         assignment_path.parent.mkdir(parents=True, exist_ok=True)
         assignment_path.write_text(json.dumps(assignment, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"records": len(records), "output": args.output, **assignment}, indent=2))
+    elif args.command == "split-caucafall-trainval-frozen":
+        from .data.manifest import read_manifest, write_manifest
+        from .data.splits import assign_frozen_2b5_trainval_splits
+        records, assignment = assign_frozen_2b5_trainval_splits(read_manifest(args.manifest))
+        write_manifest(records, args.output)
+        assignment_path = Path(args.assignment_output)
+        assignment_path.parent.mkdir(parents=True, exist_ok=True)
+        assignment_path.write_text(json.dumps(assignment, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps({"records": len(records), "output": args.output, **assignment}, indent=2))
+    elif args.command == "download-caucafall-canonical":
+        from .data.download import (
+            download_official_canonical, load_official_inventory, plan_download,
+        )
+        inventory = load_official_inventory(args.folders_json, args.metadata_dir)
+        if args.plan_only:
+            result = plan_download(inventory, args.dataset_root, args.reuse_root)
+        else:
+            result = download_official_canonical(
+                inventory, args.dataset_root, args.reuse_root, args.report_dir,
+                workers=args.workers, retries=args.retries, timeout_s=args.timeout_s,
+                min_free_bytes=args.min_free_bytes,
+            )
+        print(json.dumps(result, indent=2))
     elif args.command == "extract-poses":
         from .data.manifest import read_manifest
         from .data.pose import PoseExtractor

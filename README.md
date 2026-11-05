@@ -44,11 +44,12 @@ The live command processes frames only in memory: it does not save raw frames, s
 
 Phase 2B adds strict CAUCAFall-video and URFD-RGB-sequence adapters, provenance manifests, reproducible subject splits, tracked pose extraction, normalization, causal windows, and PyTorch loaders. Raw datasets and generated `.npz` files must remain outside Git. GMDCSA-24 is locked against pose extraction and development use.
 
-Phase 2B.4 promotes official PNG ordinal plus same-index TXT to the canonical ground-state source. AVI is secondary timing/video evidence and its frame indices are never assumed to match PNG indices. A 121-frame real canonical pilot passed; the resumable checksum-validated full workflow is implemented, but the 8.33 GB archive has not been downloaded and still requires explicit approval. Subjects 9 and 10 are the frozen sealed internal test; Subjects 3 and 5 remain development-exposed.
+Phase 2B.5 downloaded and checksum-verified the approved Subjects 1–8 official PNG/TXT inventory. The full canonical audit then found two official filename-index discontinuities (`Subject.1/Sit down` and `Subject.5/Kneel`), so controlled pose preprocessing stopped before inference. Subjects 9 and 10 remain sealed and absent; Subjects 3 and 5 remain documented as development-exposed. See the Phase 2B report before starting Phase 3.
 
 ```bash
-racfall manifest-caucafall-png --root /external/CAUCAFall --label-map configs/caucafall_activity_labels.json --output /external/manifests/canonical.csv
-racfall split-caucafall-frozen --manifest /external/manifests/canonical.csv --output /external/manifests/canonical-split.csv --assignment-output /external/manifests/frozen-split.json
+racfall download-caucafall-canonical --folders-json /external/official-folders.json --metadata-dir /external/official-metadata --dataset-root /external/CAUCAFall --reuse-root /external --report-dir /external/download-report --plan-only
+racfall manifest-caucafall-png --root /external/CAUCAFall --label-map configs/caucafall_activity_labels.json --output /external/manifests/canonical.csv --timing-fps 20
+racfall split-caucafall-trainval-frozen --manifest /external/manifests/canonical.csv --output /external/manifests/canonical-split.csv --assignment-output /external/manifests/frozen-split.json
 racfall audit-caucafall-canonical --manifest /external/manifests/canonical-split.csv --dataset-root /external/CAUCAFall --output-dir /external/canonical-audit
 racfall preprocess-caucafall-batch --manifest /external/manifests/train-val-batch.csv --dataset-root /external/CAUCAFall --canonical-audit-dir /external/canonical-audit --output-dir /external/processed --device mps --imgsz 416
 racfall build-pose-sequences --manifest /external/manifests/train-val-batch.csv --pose-dir /external/processed/poses --alignment-dir /external/canonical-audit --quality-dir /external/processed/quality --output /external/windows/train-val.npz

@@ -6,9 +6,12 @@ import zipfile
 import numpy as np
 import pytest
 
-from racfall.data.adapters import CAUCAFallCanonicalAdapter, URFDRGBAdapter, sha256_tree
+from racfall.data.adapters import (
+    CAUCAFallCanonicalAdapter, URFDRGBAdapter, sha256_canonical_tree, sha256_tree,
+)
 from racfall.data.batch import preprocess_canonical_batch
 from racfall.data.canonical import audit_canonical_sequence
+from racfall.data.download import load_official_inventory, plan_download
 from racfall.data.alignment import (
     AlignmentEvidence,
     FrameAnnotation,
@@ -23,7 +26,8 @@ from racfall.data.pose import PoseExtractor
 from racfall.data.pose_diagnostics import analyze_pose_recovery
 from racfall.data.sequences import build_windows, normalize_pose, validate_window_leakage
 from racfall.data.splits import (
-    assign_frozen_2b4_splits, assign_subject_ids, assign_subject_splits,
+    assign_frozen_2b4_splits, assign_frozen_2b5_trainval_splits,
+    assign_subject_ids, assign_subject_splits,
 )
 from racfall.data.target import assess_pose_quality, select_causal_target
 from racfall.data.torch_data import PoseWindowDataset, make_dataloader
@@ -86,6 +90,17 @@ def test_frozen_2b4_split_reserves_untouched_subjects_9_and_10():
     assert provenance["development_exposed_subjects"] == ["Subject.3", "Subject.5"]
     assert by_subject["Subject.3"] == "val"
     assert by_subject["Subject.5"] == "train"
+
+
+def test_frozen_2b5_trainval_split_requires_sealed_subjects_absent():
+    rows = [record(f"Subject.{i}", f"v{i}") for i in range(1, 9)]
+    assigned, provenance = assign_frozen_2b5_trainval_splits(reversed(rows))
+    by_subject = {row.subject_id: row.split for row in assigned}
+    assert by_subject["Subject.3"] == "val"
+    assert by_subject["Subject.5"] == "train"
+    assert provenance["sealed_absent_subjects"] == ["Subject.9", "Subject.10"]
+    with pytest.raises(ValueError, match="exactly downloaded train/validation subjects"):
+        assign_frozen_2b5_trainval_splits(rows + [record("Subject.9", "v9")])
 
 
 def test_urfd_zip_adapter_uses_sync_timestamps_and_unknown_subject(tmp_path):
@@ -178,6 +193,22 @@ def test_canonical_inventory_accepts_documented_official_copia_filename(tmp_path
     assert audit["frames"][1]["txt_filename"] == "seq00002.txt"
 
 
+def test_canonical_index_gap_quarantines_even_when_png_txt_pairs_match(tmp_path):
+    source = tmp_path / "sequence"
+    _write_canonical_fixture(source)
+    (source / "seq00002.png").unlink()
+    (source / "seq00002.txt").unlink()
+    audit = audit_canonical_sequence(
+        source, source, sequence_label="fall", video_id="gap",
+        subject_id="Subject.1", action="Sit down", timing_fps=20.0,
+        timing_provenance="frozen ordinal proxy",
+    )
+    assert audit["status"] == "quarantined"
+    assert audit["missing_png_indices"] == [2]
+    assert audit["frame_labels"] == [-1, -1]
+    assert audit["valid_ground_state_frames"] == 0
+
+
 def test_canonical_adapter_uses_png_count_and_avi_timing_only(tmp_path):
     cv2 = __import__("cv2")
     source = tmp_path / "Subject.1" / "Fall forward"
@@ -200,6 +231,65 @@ def test_canonical_adapter_uses_png_count_and_avi_timing_only(tmp_path):
     assert rows[0].source_type == "image_sequence_dir"
     assert rows[0].fps == pytest.approx(20.0)
     assert "no AVI frame-index equivalence" in rows[0].timestamp_source
+
+
+def test_canonical_adapter_supports_frozen_proxy_without_avi(tmp_path):
+    source = tmp_path / "Subject.1" / "Fall forward"
+    _write_canonical_fixture(source)
+    rows = CAUCAFallCanonicalAdapter(
+        tmp_path, {"Fall forward": "fall"}, timing_fps=20.0,
+    ).scan()
+    assert rows[0].fps == 20.0
+    assert "frozen 20 FPS development proxy" in rows[0].timestamp_source
+    first_hash = rows[0].source_sha256
+    (source / "ignored.avi").write_bytes(b"not part of the canonical source")
+    assert sha256_canonical_tree(source) == first_hash
+    (source / "seq00001.txt").write_text("1 0.5 0.5 0.5 0.8\n", encoding="utf-8")
+    assert sha256_canonical_tree(source) != first_hash
+
+
+def test_official_inventory_and_plan_require_exact_checksum(tmp_path):
+    import hashlib
+    import json
+
+    content = b"0 0.5 0.5 0.5 0.8\n"
+    digest = hashlib.sha256(content).hexdigest()
+    folder_id = "action-folder"
+    folders = [
+        {"id": "subject-folder", "name": "Subject.1", "parent_id": "root"},
+        {"id": folder_id, "name": "Walk", "parent_id": "subject-folder"},
+    ]
+    (tmp_path / "folders.json").write_text(json.dumps(folders), encoding="utf-8")
+    metadata = tmp_path / "metadata"
+    metadata.mkdir()
+    file_id = "official-file"
+    url = (
+        "https://data.mendeley.com/public-files/datasets/7w7fccy7ky/files/"
+        f"{file_id}/file_downloaded"
+    )
+    listing = [{
+        "filename": "walk00001.txt", "id": file_id, "size": len(content),
+        "content_details": {
+            "size": len(content), "sha256_hash": digest, "download_url": url,
+        },
+    }]
+    (metadata / f"Subject.1_{folder_id}.json").write_text(
+        json.dumps(listing), encoding="utf-8",
+    )
+    inventory = load_official_inventory(
+        tmp_path / "folders.json", metadata, subjects=("Subject.1",),
+    )
+    reuse = tmp_path / "reuse"
+    reuse.mkdir()
+    (reuse / "copy.txt").write_bytes(content)
+    destination = tmp_path / "destination"
+    plan = plan_download(inventory, destination, reuse)
+    assert plan["counts"] == {"verified": 0, "reusable": 1, "network": 0}
+    target = destination / "Subject.1" / "Walk" / "walk00001.txt"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"corrupt")
+    with pytest.raises(ValueError, match="fails official size/SHA-256"):
+        plan_download(inventory, destination, reuse)
 
 
 def test_pose_extract_normalize_windows_and_torch_loader(tmp_path):

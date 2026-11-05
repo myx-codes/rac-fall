@@ -138,3 +138,48 @@ def assign_frozen_2b4_splits(
         "distribution": distribution,
     }
     return output, assignment
+
+
+def assign_frozen_2b5_trainval_splits(
+    records: Iterable[ManifestRecord],
+) -> tuple[list[ManifestRecord], dict]:
+    """Apply the frozen split only to downloaded Subjects 1-8; keep 9/10 absent."""
+    rows = list(records)
+    if any(row.locked_blind for row in rows):
+        raise ValueError("Locked external blind records cannot enter CAUCAFall splits")
+    if {row.dataset for row in rows} != {"CAUCAFall"}:
+        raise ValueError("The frozen split is defined only for CAUCAFall")
+    trainval = set(FROZEN_2B4_SPLIT["train"]) | set(FROZEN_2B4_SPLIT["val"])
+    observed = {row.subject_id for row in rows}
+    if observed != trainval:
+        raise ValueError(
+            f"Phase 2B.5 requires exactly downloaded train/validation subjects "
+            f"{sorted(trainval)}, found {sorted(observed)}"
+        )
+    by_subject = {
+        subject: split for split in ("train", "val")
+        for subject in FROZEN_2B4_SPLIT[split]
+    }
+    output = [with_split(row, by_subject[row.subject_id]) for row in rows]
+    validate_manifest(output)
+    distribution = {
+        split: {
+            "subjects": list(FROZEN_2B4_SPLIT[split]),
+            "records": sum(row.split == split for row in output),
+            "class_counts": {
+                label: sum(row.split == split and row.label == label for row in output)
+                for label in ("non_fall", "fall", "unknown")
+            },
+        }
+        for split in ("train", "val")
+    }
+    return output, {
+        "protocol": "RAC-Fall Phase 2B.5 frozen train/validation preparation",
+        "frozen_date": "2026-11-05",
+        "development_exposed_subjects": sorted(DEVELOPMENT_EXPOSED_SUBJECTS),
+        "sealed_absent_subjects": list(FROZEN_2B4_SPLIT["test"]),
+        "train": list(FROZEN_2B4_SPLIT["train"]),
+        "val": list(FROZEN_2B4_SPLIT["val"]),
+        "test": list(FROZEN_2B4_SPLIT["test"]),
+        "distribution": distribution,
+    }
