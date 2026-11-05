@@ -6,7 +6,9 @@ import zipfile
 import numpy as np
 import pytest
 
-from racfall.data.adapters import URFDRGBAdapter
+from racfall.data.adapters import CAUCAFallCanonicalAdapter, URFDRGBAdapter, sha256_tree
+from racfall.data.batch import preprocess_canonical_batch
+from racfall.data.canonical import audit_canonical_sequence
 from racfall.data.alignment import (
     AlignmentEvidence,
     FrameAnnotation,
@@ -18,8 +20,11 @@ from racfall.data.alignment import (
 )
 from racfall.data.manifest import ManifestRecord, read_manifest, validate_manifest, write_manifest
 from racfall.data.pose import PoseExtractor
+from racfall.data.pose_diagnostics import analyze_pose_recovery
 from racfall.data.sequences import build_windows, normalize_pose, validate_window_leakage
-from racfall.data.splits import assign_subject_ids, assign_subject_splits
+from racfall.data.splits import (
+    assign_frozen_2b4_splits, assign_subject_ids, assign_subject_splits,
+)
 from racfall.data.target import assess_pose_quality, select_causal_target
 from racfall.data.torch_data import PoseWindowDataset, make_dataloader
 
@@ -71,6 +76,18 @@ def test_development_exposed_subjects_cannot_remain_in_internal_test():
         assign_subject_ids([f"Subject.{i}" for i in range(1, 11)], seed=20261104)
 
 
+def test_frozen_2b4_split_reserves_untouched_subjects_9_and_10():
+    rows = [record(f"Subject.{i}", f"v{i}") for i in range(1, 11)]
+    assigned, provenance = assign_frozen_2b4_splits(reversed(rows))
+    by_subject = {row.subject_id: row.split for row in assigned}
+    assert {subject for subject, split in by_subject.items() if split == "test"} == {
+        "Subject.9", "Subject.10",
+    }
+    assert provenance["development_exposed_subjects"] == ["Subject.3", "Subject.5"]
+    assert by_subject["Subject.3"] == "val"
+    assert by_subject["Subject.5"] == "train"
+
+
 def test_urfd_zip_adapter_uses_sync_timestamps_and_unknown_subject(tmp_path):
     cv2 = __import__("cv2")
     archive_path = tmp_path / "fall-01-cam0-rgb.zip"
@@ -100,6 +117,89 @@ class FakePoseModel:
             boxes=SimpleNamespace(id=[3]), speed={"inference": 5.0,
             },
         )]
+
+
+class FakeRecoveryModel(FakePoseModel):
+    def predict(self, frame, **kwargs):
+        return self.track(frame, **kwargs)
+
+
+def _write_canonical_fixture(root: Path, *, missing_txt: frozenset[int] = frozenset()):
+    cv2 = __import__("cv2")
+    root.mkdir(parents=True, exist_ok=True)
+    image = np.zeros((16, 16, 3), dtype=np.uint8)
+    for index in range(1, 4):
+        assert cv2.imwrite(str(root / f"seq{index:05d}.png"), image + index)
+        if index not in missing_txt:
+            (root / f"seq{index:05d}.txt").write_text(
+                f"{int(index == 3)} 0.5 0.5 0.5 0.8\n", encoding="utf-8",
+            )
+    (root / "classes.txt").write_text("nofall\nfall\n", encoding="utf-8")
+
+
+def test_canonical_png_txt_pairing_preserves_missing_label_mask(tmp_path):
+    source = tmp_path / "Subject.1" / "Fall forward"
+    _write_canonical_fixture(source, missing_txt=frozenset({2}))
+    output = tmp_path / "audit.json"
+    audit = audit_canonical_sequence(
+        source, source, sequence_label="fall", video_id="canonical", subject_id="Subject.1",
+        action="Fall forward", timing_fps=20.0,
+        timing_provenance="secondary AVI FPS; no index equivalence", output=output,
+    )
+    assert audit["status"] == "verified_with_invalid_labels"
+    assert audit["frame_labels"] == [0, -1, 1]
+    assert audit["label_valid"] == [True, False, True]
+    assert audit["event_labels"] == [-1, -1, -1]
+    assert audit["missing_txt_indices"] == [2]
+    assert [row["timestamp_s"] for row in audit["frames"]] == [0.0, 0.05, 0.1]
+
+    (source / "seq00004.txt").write_text("1 0.5 0.5 0.5 0.8\n", encoding="utf-8")
+    quarantined = audit_canonical_sequence(
+        source, source, sequence_label="fall", video_id="canonical", subject_id="Subject.1",
+        action="Fall forward", timing_fps=20.0,
+        timing_provenance="secondary AVI FPS; no index equivalence",
+    )
+    assert quarantined["sequence_quarantined"]
+    assert quarantined["frame_labels"] == [-1, -1, -1]
+
+
+def test_canonical_inventory_accepts_documented_official_copia_filename(tmp_path):
+    source = tmp_path / "sequence"
+    _write_canonical_fixture(source)
+    (source / "seq00002.png").rename(source / "seq00002 - copia.png")
+    audit = audit_canonical_sequence(
+        source, source, sequence_label="fall", video_id="copy-name",
+        subject_id="Subject.2", action="Fall backwards", timing_fps=20.0,
+        timing_provenance="secondary AVI FPS; no index equivalence",
+    )
+    assert audit["status"] == "verified"
+    assert audit["png_index_range"] == [1, 3]
+    assert audit["frames"][1]["png_filename"] == "seq00002 - copia.png"
+    assert audit["frames"][1]["txt_filename"] == "seq00002.txt"
+
+
+def test_canonical_adapter_uses_png_count_and_avi_timing_only(tmp_path):
+    cv2 = __import__("cv2")
+    source = tmp_path / "Subject.1" / "Fall forward"
+    _write_canonical_fixture(source)
+    writer = cv2.VideoWriter(
+        str(source / "secondary.avi"), cv2.VideoWriter_fourcc(*"MJPG"), 20.0, (16, 16),
+    )
+    assert writer.isOpened()
+    try:
+        # Deliberately differs from the three canonical PNGs.
+        for _ in range(2):
+            writer.write(np.zeros((16, 16, 3), dtype=np.uint8))
+    finally:
+        writer.release()
+    rows = CAUCAFallCanonicalAdapter(
+        tmp_path, {"Fall forward": "fall"}, hash_sources=False,
+    ).scan()
+    assert len(rows) == 1
+    assert rows[0].frame_count == 3
+    assert rows[0].source_type == "image_sequence_dir"
+    assert rows[0].fps == pytest.approx(20.0)
+    assert "no AVI frame-index equivalence" in rows[0].timestamp_source
 
 
 def test_pose_extract_normalize_windows_and_torch_loader(tmp_path):
@@ -160,6 +260,99 @@ def test_pose_extract_normalize_windows_and_torch_loader(tmp_path):
     with np.load(bounded_windows, allow_pickle=False) as bounded:
         assert bounded["labels"].tolist() == [-1, -1]
         assert bounded["event_labels"].tolist() == [0, 1]
+
+
+def test_resumable_batch_validates_checksum_and_seals_internal_test(tmp_path):
+    source = tmp_path / "dataset" / "Subject.1" / "Fall forward"
+    _write_canonical_fixture(source)
+    row = record(
+        subject="Subject.1", video="canonical", split="train", label="fall",
+        source_relpath="Subject.1/Fall forward", source_type="image_sequence_dir",
+        timestamp_source="canonical PNG ordinal / secondary AVI FPS; no index equivalence",
+        end_timestamp_s=0.15, fps=20.0, width=16, height=16, frame_count=3,
+        source_sha256=sha256_tree(source),
+    )
+    audits = tmp_path / "audits"
+    audit_canonical_sequence(
+        source, source, sequence_label="fall", video_id=row.video_id,
+        subject_id=row.subject_id, action=row.action, timing_fps=row.fps,
+        timing_provenance=row.timestamp_source, output=audits / "canonical.json",
+    )
+    output = tmp_path / "processed"
+    first = preprocess_canonical_batch(
+        [row], tmp_path / "dataset", audits, output, device="cpu",
+        model_factory=lambda _: FakePoseModel(),
+    )
+    assert first["processed"] == 1 and first["verified_sequences"] == 1
+    assert first["ground_state_class_counts"] == {"-1": 0, "0": 2, "1": 1}
+    windows = tmp_path / "canonical-windows.npz"
+    window_summary = build_windows(
+        [row], output / "poses", windows, window_frames=2, stride_frames=1,
+        alignment_dir=audits, quality_dir=output / "quality",
+    )
+    assert window_summary["valid_windows"] == 2
+    with np.load(windows, allow_pickle=False) as data:
+        assert data["ground_state_labels"].tolist() == [0, 1]
+        assert data["event_labels"].tolist() == [-1, -1]
+        assert data["quality_status"].tolist() == ["verified", "verified"]
+    second = preprocess_canonical_batch(
+        [row], tmp_path / "dataset", audits, output, device="cpu",
+        model_factory=lambda _: FakePoseModel(),
+    )
+    assert second["resumed_verified"] == 1 and second["processed"] == 0
+    assert second["results"][0]["status"] == "resumed_verified"
+    audit_path = audits / "canonical.json"
+    audit_path.write_text(audit_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    changed_provenance = preprocess_canonical_batch(
+        [row], tmp_path / "dataset", audits, output, device="cpu",
+        model_factory=lambda _: FakePoseModel(),
+    )
+    assert changed_provenance["processed"] == 1
+    assert changed_provenance["resumed_verified"] == 0
+
+    sealed = preprocess_canonical_batch(
+        [replace(row, split="test")], tmp_path / "dataset", audits, tmp_path / "sealed",
+        device="cpu", model_factory=lambda _: FakePoseModel(),
+    )
+    assert sealed["sealed_internal_test"] == 1
+
+    (source / "seq00001.txt").write_text("1 0.5 0.5 0.5 0.8\n", encoding="utf-8")
+    mismatch = preprocess_canonical_batch(
+        [row], tmp_path / "dataset", audits, tmp_path / "mismatch", device="cpu",
+        model_factory=lambda _: FakePoseModel(),
+    )
+    assert mismatch["failed"] == 1
+    assert "checksum mismatch" in mismatch["results"][0]["error"]
+
+    with pytest.raises(ValueError, match="internal blind test windows"):
+        build_windows(
+            [replace(row, split="test")], output / "poses", tmp_path / "test-windows.npz",
+            window_frames=2, stride_frames=1,
+        )
+
+
+def test_pose_recovery_diagnostic_is_annotation_free(tmp_path):
+    source = tmp_path / "dataset" / "frames"
+    _write_canonical_fixture(source)
+    row = record(
+        video="diagnostic", split="development", source_relpath="frames",
+        source_type="image_sequence_dir", timestamp_source="PNG ordinal / FPS",
+        end_timestamp_s=0.15, fps=20.0, width=16, height=16, frame_count=3,
+    )
+    baseline = tmp_path / "baseline.npz"
+    with baseline.open("wb") as handle:
+        np.savez_compressed(
+            handle, video_id=np.asarray("diagnostic"),
+            frame_offsets=np.asarray([0, 0, 0, 0], dtype=np.int64),
+        )
+    report = analyze_pose_recovery(
+        row, tmp_path / "dataset", baseline, tmp_path / "diagnostic.json", device="cpu",
+        model_factory=lambda _: FakeRecoveryModel(),
+    )
+    assert report["annotation_boxes_used"] is False
+    assert report["production_policy_changed"] is False
+    assert report["baseline_missing_frames"] == 3
+    assert set(report["methods_recovered_frames"].values()) == {3}
 
 
 def annotation(index, class_id=0):

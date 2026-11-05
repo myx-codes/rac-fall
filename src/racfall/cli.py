@@ -32,6 +32,13 @@ def main():
     manifest_cauca.add_argument("--label-map", required=True, help="Reviewed JSON mapping activity folders to fall/non_fall")
     manifest_cauca.add_argument("--output", required=True)
     manifest_cauca.add_argument("--skip-sha256", action="store_true")
+    manifest_cauca_png = command.add_parser(
+        "manifest-caucafall-png", help="Build canonical CAUCAFall PNG/TXT manifest",
+    )
+    manifest_cauca_png.add_argument("--root", required=True)
+    manifest_cauca_png.add_argument("--label-map", required=True)
+    manifest_cauca_png.add_argument("--output", required=True)
+    manifest_cauca_png.add_argument("--skip-sha256", action="store_true")
     manifest_urfd = command.add_parser("manifest-urfd", help="Audit URFD RGB sequences into a strict manifest")
     manifest_urfd.add_argument("--root", required=True)
     manifest_urfd.add_argument("--output", required=True)
@@ -43,6 +50,12 @@ def main():
     split_cauca.add_argument("--output", required=True)
     split_cauca.add_argument("--assignment-output", required=True)
     split_cauca.add_argument("--seed", type=int, default=20261104)
+    frozen_split = command.add_parser(
+        "split-caucafall-frozen", help="Apply the frozen Phase 2B.4 subject split",
+    )
+    frozen_split.add_argument("--manifest", required=True)
+    frozen_split.add_argument("--output", required=True)
+    frozen_split.add_argument("--assignment-output", required=True)
     extract = command.add_parser("extract-poses", help="Extract tracked COCO poses to compact NPZ files")
     extract.add_argument("--manifest", required=True)
     extract.add_argument("--dataset-root", required=True)
@@ -50,6 +63,7 @@ def main():
     extract.add_argument("--device", choices=["mps", "cpu"], default="mps")
     extract.add_argument("--imgsz", type=int, default=416)
     extract.add_argument("--confidence", type=float, default=0.25)
+    extract.add_argument("--detector-confidence", type=float, default=0.25)
     extract.add_argument("--limit", type=int, help="Pilot limit; omitted means all manifest records")
     sequences = command.add_parser("build-pose-sequences", help="Normalize poses and generate causal windows")
     sequences.add_argument("--manifest", required=True)
@@ -58,7 +72,9 @@ def main():
     sequences.add_argument("--window-frames", type=int, default=30)
     sequences.add_argument("--stride-frames", type=int, default=15)
     sequences.add_argument("--alignment-dir", help="Verified per-video annotation-alignment JSON directory")
+    sequences.add_argument("--quality-dir", help="Sequence quality-gate JSON directory")
     sequences.add_argument("--min-track-coverage", type=float, default=0.5)
+    sequences.add_argument("--allow-internal-test", action="store_true")
     align = command.add_parser(
         "align-caucafall-annotations",
         help="Validate CAUCAFall TXT/PNG/video alignment and write fail-closed provenance",
@@ -69,6 +85,41 @@ def main():
     align.add_argument("--pose-dir", required=True)
     align.add_argument("--output-dir", required=True)
     align.add_argument("--limit", type=int, default=1)
+    canonical = command.add_parser(
+        "audit-caucafall-canonical", help="Audit same-index canonical PNG/TXT ground-state labels",
+    )
+    canonical.add_argument("--manifest", required=True)
+    canonical.add_argument("--dataset-root", required=True)
+    canonical.add_argument("--output-dir", required=True)
+    canonical.add_argument(
+        "--annotation-dir", help="Pilot-only exact TXT directory; requires --limit 1",
+    )
+    canonical.add_argument("--limit", type=int)
+    batch = command.add_parser(
+        "preprocess-caucafall-batch", help="Resume checksum-validated canonical preprocessing",
+    )
+    batch.add_argument("--manifest", required=True)
+    batch.add_argument("--dataset-root", required=True)
+    batch.add_argument("--canonical-audit-dir", required=True)
+    batch.add_argument("--output-dir", required=True)
+    batch.add_argument("--device", choices=["mps", "cpu"], default="mps")
+    batch.add_argument("--imgsz", type=int, default=416)
+    batch.add_argument("--detector-confidence", type=float, default=0.25)
+    batch.add_argument("--keypoint-confidence", type=float, default=0.25)
+    batch.add_argument("--min-pose-coverage", type=float, default=0.5)
+    batch.add_argument("--allow-internal-test", action="store_true")
+    batch.add_argument("--limit", type=int)
+    recovery = command.add_parser(
+        "analyze-pose-recovery", help="Diagnostic lower-confidence/tiled inference on missing poses",
+    )
+    recovery.add_argument("--manifest", required=True)
+    recovery.add_argument("--dataset-root", required=True)
+    recovery.add_argument("--pose-dir", required=True)
+    recovery.add_argument("--output-dir", required=True)
+    recovery.add_argument("--device", choices=["mps", "cpu"], default="mps")
+    recovery.add_argument("--imgsz", type=int, default=416)
+    recovery.add_argument("--limit", type=int, default=1)
+    recovery.add_argument("--limit-missing", type=int)
     args = parser.parse_args()
     if args.command == "env-check":
         print_diagnostic()
@@ -92,6 +143,14 @@ def main():
         ).scan()
         write_manifest(records, args.output)
         print(json.dumps({"records": len(records), "output": args.output}, indent=2))
+    elif args.command == "manifest-caucafall-png":
+        from .data.adapters import CAUCAFallCanonicalAdapter, load_label_map
+        from .data.manifest import write_manifest
+        records = CAUCAFallCanonicalAdapter(
+            args.root, load_label_map(args.label_map), hash_sources=not args.skip_sha256,
+        ).scan()
+        write_manifest(records, args.output)
+        print(json.dumps({"records": len(records), "output": args.output}, indent=2))
     elif args.command == "manifest-urfd":
         from .data.adapters import URFDRGBAdapter
         from .data.manifest import write_manifest
@@ -110,6 +169,15 @@ def main():
         assignment_path.parent.mkdir(parents=True, exist_ok=True)
         assignment_path.write_text(json.dumps(assignment, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"records": len(records), "output": args.output, **assignment}, indent=2))
+    elif args.command == "split-caucafall-frozen":
+        from .data.manifest import read_manifest, write_manifest
+        from .data.splits import assign_frozen_2b4_splits
+        records, assignment = assign_frozen_2b4_splits(read_manifest(args.manifest))
+        write_manifest(records, args.output)
+        assignment_path = Path(args.assignment_output)
+        assignment_path.parent.mkdir(parents=True, exist_ok=True)
+        assignment_path.write_text(json.dumps(assignment, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps({"records": len(records), "output": args.output, **assignment}, indent=2))
     elif args.command == "extract-poses":
         from .data.manifest import read_manifest
         from .data.pose import PoseExtractor
@@ -120,11 +188,64 @@ def main():
             records = records[:args.limit]
         extractor = PoseExtractor(
             device=args.device, imgsz=args.imgsz, confidence_threshold=args.confidence,
+            detector_confidence=args.detector_confidence,
         )
         output_dir = Path(args.output_dir)
         results = [extractor.extract(
             args.dataset_root, record, output_dir / f"{record.video_id}.npz",
         ) for record in records]
+        print(json.dumps({"processed": len(results), "results": results}, indent=2))
+    elif args.command == "audit-caucafall-canonical":
+        from .data.canonical import audit_canonical_sequence
+        from .data.manifest import read_manifest
+        rows = read_manifest(args.manifest)
+        if args.limit is not None:
+            if args.limit <= 0:
+                raise ValueError("--limit must be > 0")
+            rows = rows[:args.limit]
+        if args.annotation_dir and len(rows) != 1:
+            raise ValueError("--annotation-dir is pilot-only and requires exactly one record")
+        root = Path(args.dataset_root).resolve()
+        output_dir = Path(args.output_dir)
+        results = []
+        for row in rows:
+            image_dir = (root / row.source_relpath).resolve()
+            annotation_dir = Path(args.annotation_dir).resolve() if args.annotation_dir else image_dir
+            payload = audit_canonical_sequence(
+                image_dir, annotation_dir, sequence_label=row.label, video_id=row.video_id,
+                subject_id=row.subject_id, action=row.action, timing_fps=row.fps,
+                timing_provenance=row.timestamp_source,
+                output=output_dir / f"{row.video_id}.json",
+            )
+            results.append({
+                "video_id": row.video_id, "status": payload["status"],
+                "frames": payload["frame_count"],
+                "valid_ground_state_frames": payload["valid_ground_state_frames"],
+                "invalid_ground_state_frames": payload["invalid_ground_state_frames"],
+                "class_counts": payload["ground_state_class_counts"],
+            })
+        print(json.dumps({"processed": len(results), "results": results}, indent=2))
+    elif args.command == "preprocess-caucafall-batch":
+        from .data.batch import preprocess_canonical_batch
+        from .data.manifest import read_manifest
+        result = preprocess_canonical_batch(
+            read_manifest(args.manifest), args.dataset_root, args.canonical_audit_dir,
+            args.output_dir, device=args.device, imgsz=args.imgsz,
+            detector_confidence=args.detector_confidence,
+            keypoint_confidence=args.keypoint_confidence,
+            min_pose_coverage=args.min_pose_coverage,
+            allow_internal_test=args.allow_internal_test, limit=args.limit,
+        )
+        print(json.dumps(result, indent=2))
+    elif args.command == "analyze-pose-recovery":
+        from .data.manifest import read_manifest
+        from .data.pose_diagnostics import analyze_pose_recovery
+        rows = read_manifest(args.manifest)[:args.limit]
+        results = [analyze_pose_recovery(
+            row, args.dataset_root, Path(args.pose_dir) / f"{row.video_id}.npz",
+            Path(args.output_dir) / f"{row.video_id}.json", device=args.device,
+            imgsz=args.imgsz, limit_missing=args.limit_missing,
+        ) for row in rows]
         print(json.dumps({"processed": len(results), "results": results}, indent=2))
     elif args.command == "build-pose-sequences":
         from .data.manifest import read_manifest
@@ -133,7 +254,9 @@ def main():
             read_manifest(args.manifest), args.pose_dir, args.output,
             window_frames=args.window_frames, stride_frames=args.stride_frames,
             alignment_dir=args.alignment_dir,
+            quality_dir=args.quality_dir,
             min_track_coverage=args.min_track_coverage,
+            allow_internal_test=args.allow_internal_test,
         )
         print(json.dumps(result, indent=2))
     elif args.command == "align-caucafall-annotations":

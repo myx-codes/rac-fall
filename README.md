@@ -44,17 +44,17 @@ The live command processes frames only in memory: it does not save raw frames, s
 
 Phase 2B adds strict CAUCAFall-video and URFD-RGB-sequence adapters, provenance manifests, reproducible subject splits, tracked pose extraction, normalization, causal windows, and PyTorch loaders. Raw datasets and generated `.npz` files must remain outside Git. GMDCSA-24 is locked against pose extraction and development use.
 
-Phase 2B.3 re-audited six real CAUCAFall videos across six subjects with fail-closed causal target selection. Three pass the combined alignment/pose-correspondence gate and three remain quarantined, so full preprocessing is not authorized. The full 8.33 GB archive has not been downloaded. Subjects 3 and 5 were exposed during development audit and are explicitly barred from being represented as an untouched internal test set.
+Phase 2B.4 promotes official PNG ordinal plus same-index TXT to the canonical ground-state source. AVI is secondary timing/video evidence and its frame indices are never assumed to match PNG indices. A 121-frame real canonical pilot passed; the resumable checksum-validated full workflow is implemented, but the 8.33 GB archive has not been downloaded and still requires explicit approval. Subjects 9 and 10 are the frozen sealed internal test; Subjects 3 and 5 remain development-exposed.
 
 ```bash
-racfall manifest-caucafall --root /external/CAUCAFall --label-map /external/caucafall_labels.json --output /external/manifests/caucafall.csv
-racfall split-caucafall --manifest /external/manifests/caucafall.csv --output /external/manifests/caucafall_split.csv --assignment-output /external/manifests/caucafall_split.json
-racfall extract-poses --manifest /external/manifests/caucafall_split.csv --dataset-root /external/CAUCAFall --output-dir /external/poses/pilot --device mps --imgsz 416 --limit 1
-racfall align-caucafall-annotations --manifest /external/manifests/caucafall_pilot.csv --dataset-root /external/CAUCAFall --reference-png-dir /external/alignment/official_png --pose-dir /external/poses/pilot --output-dir /external/alignment/verified --limit 1
-racfall build-pose-sequences --manifest /external/manifests/caucafall_pilot.csv --pose-dir /external/poses/pilot --alignment-dir /external/alignment/verified --output /external/windows/pilot.npz
+racfall manifest-caucafall-png --root /external/CAUCAFall --label-map configs/caucafall_activity_labels.json --output /external/manifests/canonical.csv
+racfall split-caucafall-frozen --manifest /external/manifests/canonical.csv --output /external/manifests/canonical-split.csv --assignment-output /external/manifests/frozen-split.json
+racfall audit-caucafall-canonical --manifest /external/manifests/canonical-split.csv --dataset-root /external/CAUCAFall --output-dir /external/canonical-audit
+racfall preprocess-caucafall-batch --manifest /external/manifests/train-val-batch.csv --dataset-root /external/CAUCAFall --canonical-audit-dir /external/canonical-audit --output-dir /external/processed --device mps --imgsz 416
+racfall build-pose-sequences --manifest /external/manifests/train-val-batch.csv --pose-dir /external/processed/poses --alignment-dir /external/canonical-audit --quality-dir /external/processed/quality --output /external/windows/train-val.npz
 ```
 
-CAUCAFall frame labels are treated as causal ground-state classification (`1` means on the ground due to a fall), not as fall-event onset/end annotations. Verified frame alignment is stored with explicit provenance; ambiguous sequences and unmapped annotations are quarantined, and unknown labels remain `-1`.
+CAUCAFall frame labels are causal ground-state classification (`1` means on the ground due to a fall), not fall-event onset/end annotations. Missing TXT labels remain `-1` with an invalid mask. Annotation boxes are excluded from inference. Sequence quality reports quarantine unresolved sources/poses before window generation.
 
 See `docs/PHASE_2B_REPORT.md` for the audited source facts, full CLI workflow, schemas, blind-test policy, and unresolved real-data pilot gate. No Phase 3 model training is implemented.
 
@@ -69,6 +69,7 @@ See `docs/PHASE_2B_REPORT.md` for the audited source facts, full CLI workflow, s
 - `docs/MASTER_PLAN_V1.md` — user-provided original master plan.
 - `docs/SPRINT_01_REPORT.md` — implemented vs not validated.
 - `docs/PHASE_2B_REPORT.md` — dataset audit, preprocessing implementation and pilot gate.
+- `docs/PHASE_2B4_WORKFLOW.md` — canonical PNG/TXT, frozen split, batch/resume and integrity workflow.
 - `docs/FALL_EVENT_ANNOTATION_PROTOCOL.md` — proposed human-review protocol for initiation, contact and recovery landmarks.
 
 ## Evaluation CSV contract

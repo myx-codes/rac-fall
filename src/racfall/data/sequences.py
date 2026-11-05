@@ -78,7 +78,9 @@ def build_windows(
     window_frames: int = 30,
     stride_frames: int = 15,
     alignment_dir: str | Path | None = None,
+    quality_dir: str | Path | None = None,
     min_track_coverage: float = 0.5,
+    allow_internal_test: bool = False,
 ) -> dict:
     if window_frames <= 1 or stride_frames <= 0 or not 0.0 <= min_track_coverage <= 1.0:
         raise ValueError(
@@ -100,14 +102,31 @@ def build_windows(
     source_track_ids = []
     metadata = []
     skipped_low_coverage = 0
+    skipped_quarantined_sequences = 0
     ground_label_names = {-1: "unknown", 0: "not_on_ground_due_to_fall", 1: "on_ground_due_to_fall"}
     event_label_names = {-1: "unknown", 0: "no_event_at_endpoint", 1: "inside_verified_event"}
     alignment_root = Path(alignment_dir) if alignment_dir is not None else None
+    quality_root = Path(quality_dir) if quality_dir is not None else None
     for record in rows:
         if not record.split:
             raise ValueError(f"{record.video_id}: split must be assigned before window generation")
         if record.label not in {"non_fall", "fall"}:
             raise ValueError(f"{record.video_id}: verified binary label required")
+        if record.split == "test" and not allow_internal_test:
+            raise ValueError(
+                f"{record.video_id}: internal blind test windows require explicit authorization"
+            )
+        quality_status = "not_provided"
+        if quality_root is not None:
+            quality_path = quality_root / f"{record.video_id}.json"
+            quality = json.loads(quality_path.read_text(encoding="utf-8"))
+            if (quality.get("schema_version") != "racfall.sequence-quality.v1" or
+                    quality.get("video_id") != record.video_id):
+                raise ValueError(f"Quality provenance does not match {record.video_id}")
+            quality_status = str(quality.get("status"))
+            if not quality.get("training_eligible", False):
+                skipped_quarantined_sequences += 1
+                continue
         path = pose_root / f"{record.video_id}.npz"
         if not path.is_file():
             raise FileNotFoundError(f"Missing pose file: {path}")
@@ -178,6 +197,7 @@ def build_windows(
                     "video_id": record.video_id, "track_id": CAUSAL_TARGET_TRACK_ID,
                     "split": record.split, "start_frame": start, "end_frame": end,
                     "alignment_status": alignment_status,
+                    "quality_status": quality_status,
                 })
     if not windows:
         raise ValueError("No complete tracked pose windows were generated")
@@ -201,6 +221,7 @@ def build_windows(
             start_frame=np.asarray([row["start_frame"] for row in metadata], dtype=np.int32),
             end_frame=np.asarray([row["end_frame"] for row in metadata], dtype=np.int32),
             alignment_status=np.asarray([row["alignment_status"] for row in metadata]),
+            quality_status=np.asarray([row["quality_status"] for row in metadata]),
             track_coverage=np.asarray(track_coverages, dtype=np.float32),
             min_track_coverage=np.asarray(min_track_coverage, dtype=np.float32),
             source_track_id=np.asarray(source_track_ids, dtype=np.int64),
@@ -220,4 +241,5 @@ def build_windows(
         "label_semantics": "ground_state_at_causal_window_endpoint",
         "min_track_coverage": min_track_coverage,
         "skipped_low_coverage_windows": skipped_low_coverage,
+        "skipped_quarantined_sequences": skipped_quarantined_sequences,
     }

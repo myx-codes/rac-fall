@@ -108,6 +108,71 @@ class CAUCAFallAdapter:
         return records
 
 
+class CAUCAFallCanonicalAdapter:
+    """Inspect official PNG sequences; AVI supplies timing rate only."""
+
+    def __init__(self, root: str | Path, label_map: dict[str, str], *, hash_sources: bool = True):
+        self.root = Path(root).resolve()
+        self.label_map = label_map
+        self.hash_sources = hash_sources
+
+    def scan(self) -> list[ManifestRecord]:
+        if not self.root.is_dir():
+            raise FileNotFoundError(f"CAUCAFall root not found: {self.root}")
+        cv2 = __import__("cv2")
+        from .canonical import _indexed_pngs
+        activity_dirs = sorted({path.parent for path in self.root.rglob("*.png")})
+        if not activity_dirs:
+            raise ValueError("No CAUCAFall PNG sequences found")
+        records = []
+        for directory in activity_dirs:
+            relative = directory.relative_to(self.root)
+            if len(relative.parts) != 2:
+                raise ValueError(f"Expected subject/activity PNG layout: {relative}")
+            subject_id, action = relative.parts
+            if action not in self.label_map:
+                raise ValueError(f"Unmapped CAUCAFall activity {action!r}")
+            pngs = _indexed_pngs(directory)
+            first = cv2.imread(str(pngs[0][2]))
+            if first is None:
+                raise ValueError(f"Cannot decode canonical PNG: {pngs[0][2]}")
+            height, width = map(int, first.shape[:2])
+            avis = sorted(directory.glob("*.avi"))
+            if len(avis) != 1:
+                raise ValueError(f"Expected exactly one secondary AVI in {relative}, found {len(avis)}")
+            capture = cv2.VideoCapture(str(avis[0]))
+            try:
+                if not capture.isOpened():
+                    raise ValueError(f"Cannot open secondary AVI: {avis[0]}")
+                fps = float(capture.get(cv2.CAP_PROP_FPS))
+            finally:
+                capture.release()
+            if not math.isfinite(fps) or fps <= 0:
+                raise ValueError(f"Invalid secondary AVI FPS: {avis[0]}")
+            sequence_id = f"caucafall-{_safe_id(relative.as_posix())}"
+            records.append(ManifestRecord(
+                dataset="CAUCAFall", dataset_version="v5", subject_id=subject_id,
+                subject_provenance="top-level source directory name",
+                video_id=f"{sequence_id}-png", sequence_id=sequence_id,
+                source_relpath=relative.as_posix(), source_type="image_sequence_dir",
+                action=action, label=self.label_map[action], label_start_s="", label_end_s="",
+                annotation_provenance=(
+                    "same-index official PNG/TXT ground-state label; missing TXT remains unknown; "
+                    "no event boundary"
+                ),
+                timestamp_source=(
+                    f"canonical PNG ordinal / secondary AVI {avis[0].name} container FPS; "
+                    "no AVI frame-index equivalence"
+                ),
+                start_timestamp_s=0.0, end_timestamp_s=len(pngs) / fps, fps=fps,
+                width=width, height=height, frame_count=len(pngs), split="",
+                source_sha256=sha256_tree(directory) if self.hash_sources else "",
+                license="CC BY 4.0", locked_blind=False,
+            ))
+        validate_manifest(records)
+        return records
+
+
 def _natural_key(name: str) -> list[object]:
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", name)]
 

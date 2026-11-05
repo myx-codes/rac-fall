@@ -1,0 +1,10 @@
+{
+  "protocol": "RAC-Fall Phase 2B.4 frozen subject split",
+  "frozen_date": "2026-11-05",
+  "train": ["Subject.1", "Subject.2", "Subject.4", "Subject.5", "Subject.6", "Subject.8"],
+  "val": ["Subject.3", "Subject.7"],
+  "test": ["Subject.9", "Subject.10"],
+  "development_exposed_subjects": ["Subject.3", "Subject.5"],
+  "test_media_exposure_at_freeze": "none",
+  "policy": "Subjects 9 and 10 are a sealed internal blind test. Do not inspect media, tune thresholds, select checkpoints or make development decisions from their results before the frozen evaluation. GMDCSA-24 remains a separate locked external blind test."
+}

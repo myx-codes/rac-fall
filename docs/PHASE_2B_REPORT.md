@@ -1,7 +1,7 @@
 # Phase 2B — Dataset Collection & Preprocessing Report
 
 Date: 2026-11-05
-Status: Phase 2B.3 quality/alignment repair completed; full preprocessing is not yet safe
+Status: Phase 2B.4 canonical-source pilot passed; controlled full preprocessing awaits download approval
 
 ## Scope and safeguards
 
@@ -284,3 +284,78 @@ Not confirmed: the CAUCAFall export process that created extra/duplicate frames,
 ### Remaining blockers and full-processing decision
 
 Full preprocessing remains **unsafe**. The blocking items are the unresolved Subject 2 temporal mapping, unsupported transition/midpoint poses in Subjects 3 and 4, five metadata-audited folders with PNG/TXT count discrepancies, the contaminated former internal-test assignment, and the not-yet-implemented atomic resume ledger/integrity validator. The full-data plan remains subject-batched, one MPS worker at a time, with `.part` downloads, official size/SHA-256 verification, source- and configuration-keyed resume entries, atomic artifact rename, per-sequence quarantine, and final inventory/offset/alignment/window/leakage reconciliation. No full archive download, GMDCSA access, training, or event timestamp invention occurred.
+
+## Phase 2B.4 canonical dataset source and controlled preprocessing
+
+This section supersedes the Phase 2B.3 full-processing decision while retaining its historical AVI findings. No full archive was downloaded, no model was trained, and GMDCSA-24 remained locked.
+
+### Canonical-source decision
+
+Official PNG ordinal is now the canonical frame order for CAUCAFall ground-state training, and the TXT carrying the same embedded one-based index is its only frame label. AVI remains useful for video review and its container FPS can be recorded as a timing-rate proxy, but PNG and AVI indices are never assumed to correspond. Canonical timestamps therefore use `PNG ordinal / secondary AVI FPS` and explicitly do not claim source capture timestamps or AVI alignment.
+
+The audit requires PNG indices to begin at one, remain contiguous, decode at one resolution and use a single filename prefix. TXT rows retain the original class semantics: class 0 is not on the ground due to a fall; class 1 is on the ground due to a fall, not fall initiation. A missing same-index TXT produces `ground_state_label=-1` and `label_valid=false`. It is never filled from a neighbor. An orphan TXT, PNG gap, prefix conflict, decode error or resolution change quarantines the sequence. Event labels remain `-1` unless a separate reviewed event protocol supplies boundaries.
+
+The real pilot exposed an official filename variant: source index 91 is named `cas200091 - copia.png`. The strict first pass quarantined it as a missing PNG/orphan TXT. The parser now accepts only this documented optional ` - copia` suffix while preserving embedded index 91; a regression test covers the case.
+
+### Real Subject 2 canonical pilot
+
+Inputs were the already-downloaded 121 official PNGs and 121 official TXT annotations; no new dataset media was downloaded. The canonical PNG tree SHA-256 is `e03c5d78a39deea277ef6b6e7f3cf30a0e4a83f2d48362875839d03007c5d5ee`.
+
+- 121 PNG indices and 121 TXT indices pair exactly from 1 through 121.
+- All PNGs decode at 720×480 and retain monotonic ordinal order.
+- Ground-state distribution is 63 class-0 and 58 class-1 frames; unknown labels: 0.
+- Event labels known: 0. No onset, ground-contact, recovery or end time was inferred.
+- The secondary AVI rate is 20 FPS, yielding a canonical ordinal timing proxy from 0.00 through 6.00 seconds. This does not resolve or need the AVI's 119-frame divergence.
+- Final canonical audit time was 0.68 seconds; maximum RSS was 78,086,144 bytes. The provenance JSON SHA-256 is `4d822049c7f24812047a74d09eadf3158f04be1bf33014d38332cb8412a783ed`.
+
+This sequence was quarantined under AVI-primary alignment in Phase 2B.3, but it is verified under the new PNG-primary contract because every canonical image has an independently paired same-index label. No AVI label shift was applied.
+
+### Pose quality and inference-only diagnostics
+
+The canonical pilot used YOLO26n-Pose, MPS, `imgsz=416`, detector confidence 0.25, keypoint confidence 0.25 and ByteTrack. It produced 112 detections/causal target frames from 121 frames and marked nine frames missing (7.44%). Of 1,904 possible selected-pose keypoints, 1,611 are valid and 293 are invalid (15.39%). The sequence passes the frozen 50% pose-coverage gate.
+
+Final extraction took 2.7986 seconds (`43.236` FPS). The checksum/audit/quality batch wall timer was 3.617532 seconds (`33.448` FPS), while the outer process wall time was 3.90 seconds. Maximum RSS was 608,256,000 bytes and peak memory footprint was 454,854,144 bytes. Pose and quality artifacts total 23,977 bytes; the observed filesystem free-space change was 212,992 bytes including filesystem allocation and ledger/summary writes.
+
+The nine baseline-missing frames were evaluated without annotation boxes. Independent full-frame prediction recovered 5/9 at confidence 0.25, 5/9 at 0.10 and 7/9 at 0.05. Four annotation-free 60%-size overlapping tiles found a usable pose candidate on 9/9 at confidence 0.25. Diagnostic inference took 1.60056 seconds; outer wall time was 2.33 seconds with maximum RSS 610,992,128 bytes. These candidates are not used for training: tile coordinate merging, duplicate suppression and causal identity continuity are not yet frozen or validated. Production extraction thresholds were not changed.
+
+### Quality gates, deterministic windows and resume
+
+Each sequence receives a quality JSON containing canonical status, class/invalid-label counts, pose coverage, missing-pose rate, keypoint validity, selector configuration and quarantine reasons. Window generation accepts `--quality-dir`, skips non-eligible sequences, preserves unknown endpoint labels, and refuses internal-test windows without explicit authorization.
+
+The pilot generated seven 30-frame windows at stride 15 and 50% coverage: three class-0, four class-1 and zero unknown ground-state endpoints. All seven event targets remain unknown. No window was rejected for coverage or sequence quality. The quality-enforced output is 24,574 bytes and repeated builds are byte-identical with SHA-256 `e4a3d4d09c881edd595e9460793c5973fb15cd0f78a0265d6d0dc32fb4f5c2a7`.
+
+Controlled batches require a manifest source checksum and verify it before inference. Pose and quality files are written through `.partial` paths and atomic rename. The JSON ledger signature covers the complete manifest record, model, device, image size, both confidence thresholds, quality threshold and schema versions. Resume requires matching signature plus matching pose/quality SHA-256; otherwise the sequence is recomputed or fails on source mismatch. An unchanged real-pilot rerun reported one `resumed_verified`, performed zero inference, consumed zero measured disk bytes and reports no synthetic throughput value.
+
+### Frozen subject-independent split
+
+The earlier seed split is retired. Subjects 3 and 5 were exposed during development and now belong only to development roles. Media for Subjects 9 and 10 has not been downloaded, decoded, previewed or used for tuning; only public metadata/file inventory was inspected. The split was frozen before full preprocessing in `configs/caucafall_split_phase2b4.json`:
+
+- train: Subjects 1, 2, 4, 5, 6, 8 — 60 sequences, 30 fall / 30 ADL by official activity inventory;
+- validation: Subjects 3, 7 — 20 sequences, 10 fall / 10 ADL;
+- sealed internal test: Subjects 9, 10 — 20 sequences, 10 fall / 10 ADL.
+
+The assignment is fixed rather than selected from pose quality or model results. Batch preprocessing skips `test` by default, and test window generation fails unless explicitly authorized for the frozen evaluation. GMDCSA-24 remains the separate locked external blind test.
+
+### Full-dataset workflow and disk gate
+
+The implemented workflow is: official download and checksum verification; canonical manifest; frozen split; per-sequence PNG/TXT audit; subject-batched MPS extraction; quality/quarantine reports; quality-enforced windows; and final ledger/inventory reconciliation. `docs/PHASE_2B4_WORKFLOW.md` contains commands and acceptance checks.
+
+The official archive is still 8,326,349,365 bytes. Archive plus extracted source requires approximately 15.50 GiB before generated data; current measured free space during the pilot was about 168.3 GB, so capacity is sufficient. The download remains blocked on explicit user approval.
+
+### Automated verification
+
+The suite now has 35 passing tests in 0.89 seconds. New coverage includes missing-TXT invalid masks, canonical causal labels, the canonical adapter's PNG-count/AVI-timing separation, the official `copia` filename, orphan-TXT quarantine, frozen Subjects 9/10, checksum and audit-provenance invalidation, atomic/resumable batch behavior, annotation-free recovery diagnostics, quality provenance, and internal-test sealing. Compile, CLI help and diff checks also pass.
+
+### Readiness and remaining blockers
+
+The code and pilot evidence are **ready for controlled train/validation preprocessing after explicit approval to download the official archive**. They are not authorization to begin Phase 3 training.
+
+Remaining blockers are:
+
+1. the 8.33 GB archive is not downloaded and requires explicit approval;
+2. full-data canonical audits and real batch distributions cannot be reported until the archive is present;
+3. five metadata-audited folders with fewer TXT than PNG will contain explicit invalid labels and must be reviewed through generated provenance, not repaired;
+4. overlapping-tile recovery is diagnostic only until coordinate/identity merging is validated without annotation boxes;
+5. PNGs have no independent source timestamps, so AVI FPS remains a timing-rate proxy rather than index alignment;
+6. participant likeness/consent and redistribution handling still require project review;
+7. Subjects 9/10 must remain sealed until the frozen internal evaluation.

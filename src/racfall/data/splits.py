@@ -10,6 +10,11 @@ from .manifest import ManifestRecord, validate_manifest, with_split
 # These subjects were inspected during the Phase 2B.2/2B.3 development audit.
 # They are no longer eligible to represent an untouched internal test set.
 DEVELOPMENT_EXPOSED_SUBJECTS = frozenset({"Subject.3", "Subject.5"})
+FROZEN_2B4_SPLIT = {
+    "train": ("Subject.1", "Subject.2", "Subject.4", "Subject.5", "Subject.6", "Subject.8"),
+    "val": ("Subject.3", "Subject.7"),
+    "test": ("Subject.9", "Subject.10"),
+}
 
 
 def assign_subject_ids(
@@ -86,3 +91,50 @@ def assign_subject_splits(
         for split in ("train", "val", "test")
     }
     return output, {**assignment, "distribution": distribution}
+
+
+def assign_frozen_2b4_splits(
+    records: Iterable[ManifestRecord],
+) -> tuple[list[ManifestRecord], dict]:
+    """Apply the prospectively frozen Phase 2B.4 split with Subjects 9/10 blind."""
+    rows = list(records)
+    if any(row.locked_blind for row in rows):
+        raise ValueError("Locked external blind records cannot enter CAUCAFall splits")
+    if {row.dataset for row in rows} != {"CAUCAFall"}:
+        raise ValueError("The frozen split is defined only for CAUCAFall")
+    expected = {subject for split in FROZEN_2B4_SPLIT.values() for subject in split}
+    observed = {row.subject_id for row in rows}
+    if observed != expected:
+        raise ValueError(
+            f"Frozen Phase 2B.4 split requires subjects {sorted(expected)}, found {sorted(observed)}"
+        )
+    by_subject = {
+        subject: split for split in ("train", "val", "test")
+        for subject in FROZEN_2B4_SPLIT[split]
+    }
+    output = [with_split(row, by_subject[row.subject_id]) for row in rows]
+    validate_manifest(output)
+    distribution = {
+        split: {
+            "subjects": list(FROZEN_2B4_SPLIT[split]),
+            "records": sum(row.split == split for row in output),
+            "class_counts": {
+                label: sum(row.split == split and row.label == label for row in output)
+                for label in ("non_fall", "fall", "unknown")
+            },
+        }
+        for split in ("train", "val", "test")
+    }
+    assignment = {
+        "protocol": "RAC-Fall Phase 2B.4 frozen subject split",
+        "frozen_date": "2026-11-05",
+        "selection_basis": (
+            "Subjects 9 and 10 had no media exposure; remaining roles were frozen "
+            "without using sequence quality or model performance"
+        ),
+        "development_exposed_subjects": sorted(DEVELOPMENT_EXPOSED_SUBJECTS),
+        "internal_blind_test_subjects": list(FROZEN_2B4_SPLIT["test"]),
+        **{split: list(FROZEN_2B4_SPLIT[split]) for split in ("train", "val", "test")},
+        "distribution": distribution,
+    }
+    return output, assignment

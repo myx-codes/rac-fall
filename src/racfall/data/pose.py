@@ -76,7 +76,15 @@ def iter_frames(root: str | Path, record: ManifestRecord) -> Iterator[tuple[int,
             capture.release()
         return
 
-    timestamps = _urfd_timestamps(root_path, record)
+    if record.dataset == "URFD":
+        timestamps = _urfd_timestamps(root_path, record)
+    elif record.dataset == "CAUCAFall":
+        # PNG ordinal is canonical. AVI contributes only its container FPS;
+        # this does not assert any frame-index correspondence with the PNGs.
+        timestamps = [record.start_timestamp_s + index / record.fps
+                      for index in range(record.frame_count)]
+    else:
+        raise ValueError(f"Unsupported image-sequence dataset: {record.dataset}")
     if record.source_type == "image_sequence_zip":
         with zipfile.ZipFile(source) as archive:
             names = sorted((name for name in archive.namelist() if name.lower().endswith(".png")),
@@ -105,9 +113,11 @@ class PoseExtractor:
         device: str = "mps",
         imgsz: int = 416,
         confidence_threshold: float = 0.25,
+        detector_confidence: float = 0.25,
         model_factory=None,
     ):
-        if imgsz < 32 or not 0 <= confidence_threshold <= 1:
+        if (imgsz < 32 or not 0 <= confidence_threshold <= 1 or
+                not 0 <= detector_confidence <= 1):
             raise ValueError("Invalid imgsz or confidence threshold")
         if model_factory is None:
             try:
@@ -118,6 +128,7 @@ class PoseExtractor:
         self.device = device
         self.imgsz = imgsz
         self.confidence_threshold = confidence_threshold
+        self.detector_confidence = detector_confidence
 
     def extract(self, root: str | Path, record: ManifestRecord, output: str | Path) -> dict:
         if record.locked_blind or record.split == "blind_test" or record.dataset == "GMDCSA-24":
@@ -135,7 +146,8 @@ class PoseExtractor:
         for frame_index, timestamp_s, frame in iter_frames(root, record):
             result_rows = self.model.track(
                 frame, persist=frame_index > 0, tracker="bytetrack.yaml",
-                device=self.device, imgsz=self.imgsz, verbose=False, save=False, show=False,
+                device=self.device, imgsz=self.imgsz, conf=self.detector_confidence,
+                verbose=False, save=False, show=False,
             )
             result = result_rows[0] if result_rows else None
             frame_indices.append(frame_index)
@@ -190,6 +202,8 @@ class PoseExtractor:
                 frame_width=np.asarray(record.width, dtype=np.int32),
                 frame_height=np.asarray(record.height, dtype=np.int32),
                 imgsz=np.asarray(self.imgsz, dtype=np.int32), device=np.asarray(self.device),
+                detector_confidence=np.asarray(self.detector_confidence, dtype=np.float32),
+                keypoint_confidence=np.asarray(self.confidence_threshold, dtype=np.float32),
             )
         elapsed = time.perf_counter() - started
         return {

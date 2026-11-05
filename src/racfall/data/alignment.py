@@ -408,7 +408,9 @@ def audit_caucafall_alignment(
 
 def load_alignment_labels(path: str | Path, video_id: str, frame_count: int) -> tuple[list[int], str]:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if payload.get("schema_version") != SCHEMA_VERSION or payload.get("video_id") != video_id:
+    from .canonical import SCHEMA_VERSION as CANONICAL_SCHEMA_VERSION
+    if (payload.get("schema_version") not in {SCHEMA_VERSION, CANONICAL_SCHEMA_VERSION} or
+            payload.get("video_id") != video_id):
         raise ValueError(f"Alignment provenance does not match {video_id}")
     labels = payload.get("frame_labels", [])
     if len(labels) != frame_count or any(value not in {-1, 0, 1} for value in labels):
