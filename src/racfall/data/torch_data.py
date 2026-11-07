@@ -47,6 +47,10 @@ class PoseWindowDataset:
             "video_id": str(self.data["video_id"][index]),
             "subject_id": str(self.data["subject_id"][index]),
             "track_id": int(self.data["track_id"][index]),
+            "start_frame": int(self.data["start_frame"][index])
+            if "start_frame" in self.data.files else -1,
+            "end_frame": int(self.data["end_frame"][index])
+            if "end_frame" in self.data.files else -1,
             "split": str(self.data["split"][index]),
         }
 
@@ -56,7 +60,7 @@ class PoseWindowDataset:
 
 def make_dataloader(path: str | Path, *, split: str, batch_size: int = 32,
                     shuffle: bool | None = None, num_workers: int = 0,
-                    include_unknown: bool = False):
+                    include_unknown: bool = False, generator=None):
     if batch_size <= 0 or num_workers < 0:
         raise ValueError("Invalid DataLoader configuration")
     torch = __import__("torch")
@@ -70,4 +74,5 @@ def make_dataloader(path: str | Path, *, split: str, batch_size: int = 32,
         shuffle = split == "train"
     return torch.utils.data.DataLoader(
         dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,
+        generator=generator,
     )

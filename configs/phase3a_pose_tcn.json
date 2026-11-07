@@ -1,0 +1,37 @@
+{
+  "task": "causal ground-state classification; not fall-event detection",
+  "windows_sha256": "1c7b461b281e401a636165b9c6be8c291b27f4ea1430fc3ec452df15cc2cf364",
+  "train_windows": 494,
+  "validation_windows": 161,
+  "model": {
+    "input_channels": 68,
+    "channels": 64,
+    "dilations": [1, 2, 4],
+    "kernel_size": 3,
+    "dropout": 0.2
+  },
+  "optimizer": {
+    "name": "AdamW",
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001
+  },
+  "loss": {
+    "name": "BCEWithLogitsLoss",
+    "positive_weight": 2.6592592592592594
+  },
+  "training": {
+    "device": "mps",
+    "batch_size": 32,
+    "maximum_epochs": 100,
+    "early_stopping_patience": 15,
+    "early_stopping_min_delta": 0.0001,
+    "seeds": [17, 29, 43],
+    "decision_threshold": 0.5
+  },
+  "evaluation": {
+    "bootstrap_unit": "subject",
+    "bootstrap_samples": 2000,
+    "validation_subjects": ["Subject.3", "Subject.7"],
+    "sealed_subjects": ["Subject.9", "Subject.10"]
+  }
+}

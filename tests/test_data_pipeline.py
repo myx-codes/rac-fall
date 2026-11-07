@@ -317,6 +317,8 @@ def test_pose_extract_normalize_windows_and_torch_loader(tmp_path):
     windows_path = tmp_path / "windows.npz"
     summary = build_windows([row], pose_path.parent, windows_path, window_frames=2, stride_frames=1)
     assert summary["windows"] == 2
+    assert summary["subjects"]["S01"]["valid_windows"] == 2
+    assert summary["subjects"]["S01"]["ground_state_0_windows"] == 2
     dataset = PoseWindowDataset(windows_path, split="train")
     assert len(dataset) == 2
     sample = dataset[0]

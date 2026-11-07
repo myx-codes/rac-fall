@@ -1,0 +1,44 @@
+{
+  "schema_version": "racfall.frozen-baseline.v1",
+  "baseline_id": "phase3a-causal-tcn-seed29-epoch6",
+  "status": "frozen",
+  "task": "causal ground-state classification; not fall-event detection",
+  "model": {
+    "name": "causal_tcn",
+    "input_channels": 68,
+    "channels": 64,
+    "dilations": [1, 2, 4],
+    "kernel_size": 3,
+    "dropout": 0.2,
+    "decision_threshold": 0.5
+  },
+  "selection": {
+    "seed": 29,
+    "epoch": 6,
+    "criterion": "minimum Phase 3A validation BCE",
+    "validation_loss": 0.1356429398059845
+  },
+  "checkpoint": {
+    "filename": "causal_tcn-seed-29.pt",
+    "sha256": "468ccf4132e988df5406034b6b306a882c9e92d6e0c16c4853c97337ad0bc72b"
+  },
+  "training_configuration": {
+    "repository_path": "configs/phase3a_pose_tcn.json",
+    "sha256": "d965b2b9a1ca636b694a2946e0bf757725ee3cb797e80fd334425ef7c6ee6008"
+  },
+  "preprocessing": {
+    "schema_version": "racfall.windows.v3",
+    "artifact_sha256": "1c7b461b281e401a636165b9c6be8c291b27f4ea1430fc3ec452df15cc2cf364",
+    "window_frames": 30,
+    "stride_frames": 15,
+    "pose_features": "17 normalized COCO (x,y,confidence) triplets",
+    "validity_features": "17 explicit keypoint validity masks",
+    "target_selection": "causal_geometry_without_annotations",
+    "label_semantics": "ground_state_at_causal_window_endpoint"
+  },
+  "development_scope": {
+    "validation_subjects": ["Subject.3", "Subject.7"],
+    "sealed_subjects": ["Subject.9", "Subject.10"],
+    "gmdcsa24_accessed": false
+  }
+}

@@ -144,6 +144,32 @@ def main():
     recovery.add_argument("--imgsz", type=int, default=416)
     recovery.add_argument("--limit", type=int, default=1)
     recovery.add_argument("--limit-missing", type=int)
+    train_tcn = command.add_parser(
+        "train-pose-tcn", help="Train Phase 3A ground-state TCN/static baselines",
+    )
+    train_tcn.add_argument("--windows", required=True)
+    train_tcn.add_argument("--output-dir", required=True)
+    train_tcn.add_argument("--device", choices=["mps", "cpu"], default="mps")
+    train_tcn.add_argument("--seeds", type=int, nargs="+", default=[17, 29, 43])
+    train_tcn.add_argument("--epochs", type=int, default=100)
+    train_tcn.add_argument("--patience", type=int, default=15)
+    train_tcn.add_argument("--batch-size", type=int, default=32)
+    train_tcn.add_argument("--learning-rate", type=float, default=1e-3)
+    train_tcn.add_argument("--weight-decay", type=float, default=1e-4)
+    train_tcn.add_argument("--channels", type=int, default=64)
+    train_tcn.add_argument("--dropout", type=float, default=0.2)
+    train_tcn.add_argument("--bootstrap-samples", type=int, default=2000)
+    phase3b = command.add_parser(
+        "analyze-phase3b", help="Freeze/register Phase 3A and analyze validation failures",
+    )
+    phase3b.add_argument("--windows", required=True)
+    phase3b.add_argument("--checkpoint", required=True)
+    phase3b.add_argument("--registry", default="configs/phase3b_frozen_baseline.json")
+    phase3b.add_argument("--phase3a-config", default="configs/phase3a_pose_tcn.json")
+    phase3b.add_argument("--output-dir", required=True)
+    phase3b.add_argument("--device", choices=["mps", "cpu"], default="mps")
+    phase3b.add_argument("--repeat-inference", type=int, default=20)
+    phase3b.add_argument("--robustness-seed", type=int, default=20261108)
     args = parser.parse_args()
     if args.command == "env-check":
         print_diagnostic()
@@ -330,6 +356,25 @@ def main():
                 ),
             })
         print(json.dumps({"processed": len(results), "results": results}, indent=2))
+    elif args.command == "train-pose-tcn":
+        from .training.phase3a import TrainingConfig, run_phase3a
+        config = TrainingConfig(
+            seeds=tuple(args.seeds), epochs=args.epochs, patience=args.patience,
+            batch_size=args.batch_size, learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay, channels=args.channels,
+            dropout=args.dropout, device=args.device,
+            bootstrap_samples=args.bootstrap_samples,
+        )
+        result = run_phase3a(args.windows, args.output_dir, config=config)
+        print(json.dumps(result, indent=2))
+    elif args.command == "analyze-phase3b":
+        from .training.phase3b import analyze_phase3b
+        result = analyze_phase3b(
+            args.windows, args.checkpoint, args.registry, args.phase3a_config,
+            args.output_dir, device=args.device, repeat_inference=args.repeat_inference,
+            robustness_seed=args.robustness_seed,
+        )
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

@@ -103,11 +103,29 @@ def build_windows(
     metadata = []
     skipped_low_coverage = 0
     skipped_quarantined_sequences = 0
+    subject_metrics: dict[str, dict] = {}
     ground_label_names = {-1: "unknown", 0: "not_on_ground_due_to_fall", 1: "on_ground_due_to_fall"}
     event_label_names = {-1: "unknown", 0: "no_event_at_endpoint", 1: "inside_verified_event"}
     alignment_root = Path(alignment_dir) if alignment_dir is not None else None
     quality_root = Path(quality_dir) if quality_dir is not None else None
     for record in rows:
+        subject_stats = subject_metrics.setdefault(record.subject_id, {
+            "split": record.split,
+            "sequences_requested": 0,
+            "sequences_eligible": 0,
+            "sequences_quarantined": 0,
+            "candidate_windows": 0,
+            "windows": 0,
+            "valid_windows": 0,
+            "invalid_windows": 0,
+            "ground_state_0_windows": 0,
+            "ground_state_1_windows": 0,
+            "skipped_low_coverage_windows": 0,
+            "skipped_quarantined_windows": 0,
+        })
+        if subject_stats["split"] != record.split:
+            raise ValueError(f"Subject split changed within manifest: {record.subject_id}")
+        subject_stats["sequences_requested"] += 1
         if not record.split:
             raise ValueError(f"{record.video_id}: split must be assigned before window generation")
         if record.label not in {"non_fall", "fall"}:
@@ -126,7 +144,15 @@ def build_windows(
             quality_status = str(quality.get("status"))
             if not quality.get("training_eligible", False):
                 skipped_quarantined_sequences += 1
+                subject_stats["sequences_quarantined"] += 1
+                candidates = max(
+                    0, (int(quality.get("frames", record.frame_count)) - window_frames)
+                    // stride_frames + 1,
+                )
+                subject_stats["candidate_windows"] += candidates
+                subject_stats["skipped_quarantined_windows"] += candidates
                 continue
+        subject_stats["sequences_eligible"] += 1
         path = pose_root / f"{record.video_id}.npz"
         if not path.is_file():
             raise FileNotFoundError(f"Missing pose file: {path}")
@@ -134,6 +160,8 @@ def build_windows(
             if str(pose["video_id"]) != record.video_id:
                 raise ValueError(f"Pose/manifest video mismatch: {path}")
             n_frames = len(pose["frame_index"])
+            candidates = max(0, (n_frames - window_frames) // stride_frames + 1)
+            subject_stats["candidate_windows"] += candidates
             if alignment_root is not None:
                 from .alignment import load_alignment_labels
                 frame_labels, alignment_status = load_alignment_labels(
@@ -171,6 +199,7 @@ def build_windows(
                 track_coverage = float(presence[start:end].mean())
                 if track_coverage < min_track_coverage:
                     skipped_low_coverage += 1
+                    subject_stats["skipped_low_coverage_windows"] += 1
                     continue
                 windows.append(features[start:end].reshape(window_frames, 51))
                 masks.append(validity[start:end])
@@ -192,6 +221,12 @@ def build_windows(
                     event_label = -1
                 labels.append(window_label)
                 event_labels.append(event_label)
+                subject_stats["windows"] += 1
+                if window_label < 0:
+                    subject_stats["invalid_windows"] += 1
+                else:
+                    subject_stats["valid_windows"] += 1
+                    subject_stats[f"ground_state_{window_label}_windows"] += 1
                 metadata.append({
                     "dataset": record.dataset, "subject_id": record.subject_id,
                     "video_id": record.video_id, "track_id": CAUSAL_TARGET_TRACK_ID,
@@ -242,4 +277,5 @@ def build_windows(
         "min_track_coverage": min_track_coverage,
         "skipped_low_coverage_windows": skipped_low_coverage,
         "skipped_quarantined_sequences": skipped_quarantined_sequences,
+        "subjects": dict(sorted(subject_metrics.items())),
     }

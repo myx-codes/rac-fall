@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
+import resource
 import shutil
 import time
 from typing import Iterable
@@ -17,6 +19,11 @@ from .pose import PoseExtractor
 
 
 LEDGER_SCHEMA_VERSION = "racfall.preprocess-ledger.v1"
+
+
+def _peak_rss_bytes() -> int:
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if platform.system() == "Darwin" else value * 1024
 
 
 def _atomic_json(path: Path, payload: dict) -> None:
@@ -162,6 +169,7 @@ def preprocess_canonical_batch(
                 "pose_detections": extraction["pose_detections"],
                 "extraction_elapsed_s": extraction["elapsed_s"],
                 "extraction_throughput_fps": extraction["throughput_fps"],
+                "mean_inference_ms": extraction["mean_inference_ms"],
                 "quality_status": quality["status"],
                 "training_eligible": quality["training_eligible"],
                 "ground_state_class_counts": quality["ground_state_class_counts"],
@@ -221,6 +229,7 @@ def preprocess_canonical_batch(
         "wall_throughput_fps": (
             round(processed_frames / elapsed, 3) if elapsed and processed_frames else None
         ),
+        "peak_rss_bytes": _peak_rss_bytes(),
         "disk": {
             "total_bytes": disk_after.total,
             "free_bytes_before": disk_before.free,

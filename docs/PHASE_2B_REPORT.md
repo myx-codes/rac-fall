@@ -415,3 +415,56 @@ This is an official-inventory alignment problem, not a download corruption: the 
 The CLI now supports official inventory planning/downloading, PNG-only canonical manifests with an explicit frozen ordinal timing proxy, and the frozen train/validation split while sealed Subjects 9/10 remain absent. The downloader rejects non-official URLs, verifies official size/SHA-256, resumes `.partial` transfers, bounds retries, reuses only checksum-identical local files, checks disk capacity, and fails rather than overwriting a mismatched target. Canonical source hashes exclude secondary AVI data but include the immutable PNG/TXT source.
 
 The suite has 39 passing tests. Added regression coverage includes official URL/inventory validation, exact checksum reuse, target mismatch refusal, PNG-only timing provenance, canonical hash scope, frozen train/validation isolation, and fail-closed quarantine when both PNG and TXT share an otherwise-hidden index gap.
+
+## Phase 2B.5 approved continuation: controlled pose preprocessing
+
+Status on 2026-11-06: **controlled preprocessing completed; ready to configure Phase 3 training, but no model training has started**.
+
+The user explicitly approved continuing with the 78 audit-eligible sequences. `Subject.1/Sit down` and `Subject.5/Kneel` remained excluded, and their original files and audit SHA-256 values were preserved. The run processed 58 train and 20 validation sequences (14,973 frames) sequentially by subject using `yolo26n-pose.pt` (`eb3bb8268828aeaf515cec23a4bfafd793944a86fe9af94ba7823609c14522a9`), Apple MPS, `imgsz=416`, detector confidence 0.25, keypoint confidence 0.25, and ByteTrack. Subjects 9/10 and GMDCSA-24 remained absent.
+
+### Pose and sequence quality results
+
+All 78 pose/quality artifacts completed without source, audit, decode, or checksum failure. The fixed 50% causal-target coverage gate accepted 64 sequences and quarantined 14; the threshold was not relaxed. The accepted sequences contain 12,206 frames, with a causal target on 10,759 frames (88.1451745% accepted-sequence coverage). Selected accepted poses contain 163,896 valid and 19,007 invalid keypoints.
+
+Pose-quality quarantines were:
+
+- Subject 1: `Fall right`, `Kneel`;
+- Subject 3: `Fall backwards`, `Fall forward`, `Fall left`, `Fall sitting`;
+- Subject 6: `Fall backwards`, `Fall right`;
+- Subject 7: `Fall left`;
+- Subject 8: `Fall backwards`, `Fall forward`, `Fall left`, `Fall right`, `Pick up object`.
+
+Every quarantine reason is causal target pose coverage below 50%; no annotation box was used for inference and no recovery, index shifting, or threshold tuning was applied. The known missing TXT labels remained `-1`: Subject 6 `Walk` index 260, Subject 8 `Hop` index 96, and Subject 8 `Pick up object` index 90. They remain represented by explicit label-validity masks. None happened to fall on the endpoint of an accepted causal window, so the final window set has zero unknown endpoint labels.
+
+| Subject | Split | Accepted / processed sequences | Frames | Labels -1 / 0 / 1 | All-sequence pose coverage | Valid / invalid windows | Window labels 0 / 1 | Wall FPS | Wall seconds | Peak RSS bytes |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | train | 7 / 9 | 1,466 | 0 / 1,151 / 315 | 75.9891% | 59 / 0 | 47 / 12 | 67.684 | 21.659506 | 609,763,328 |
+| 2 | train | 10 / 10 | 1,471 | 0 / 1,061 / 410 | 94.2896% | 80 / 0 | 57 / 23 | 65.197 | 22.562454 | 618,184,704 |
+| 3 | val | 6 / 10 | 1,920 | 0 / 1,360 / 560 | 65.2083% | 61 / 0 | 51 / 10 | 69.812 | 27.502292 | 615,743,488 |
+| 4 | train | 10 / 10 | 1,864 | 0 / 1,253 / 611 | 82.3498% | 96 / 0 | 66 / 30 | 69.937 | 26.652721 | 619,937,792 |
+| 5 | train | 9 / 9 | 1,997 | 0 / 1,209 / 788 | 89.7346% | 114 / 0 | 69 / 45 | 68.912 | 28.978948 | 617,840,640 |
+| 6 | train | 8 / 10 | 2,182 | 1 / 1,425 / 756 | 76.3520% | 90 / 0 | 71 / 19 | 70.591 | 30.910321 | 624,852,992 |
+| 7 | val | 9 / 10 | 1,948 | 0 / 1,245 / 703 | 88.5524% | 100 / 0 | 65 / 35 | 68.685 | 28.361356 | 627,261,440 |
+| 8 | train | 5 / 10 | 2,125 | 2 / 1,419 / 704 | 55.7647% | 55 / 0 | 49 / 6 | 74.571 | 28.496255 | 632,127,488 |
+
+The subject batch wall total was 215.123853 seconds for 14,973 frames (69.602 FPS). Summed extraction time was 201.9797 seconds (74.131 FPS); frame-weighted model-reported inference latency was 3.483 ms. Maximum measured subject-process RSS was 632,127,488 bytes. These are preprocessing measurements, not fall-detection accuracy or real-time safety claims.
+
+### Causal windows and split isolation
+
+The frozen 30-frame, stride-15 generator evaluated 884 candidate windows. Sequence quarantine removed 165 candidates and the unchanged 50% per-window track gate removed 64 more, leaving exactly 655 valid windows and zero invalid endpoint-label windows:
+
+- train: 494 windows — 359 ground-state 0 and 135 ground-state 1;
+- validation: 161 windows — 116 ground-state 0 and 45 ground-state 1;
+- total: 475 ground-state 0 and 180 ground-state 1.
+
+Ground-state labels remain separate from event labels. Because no true event boundaries exist, all 258 fall-activity windows retain event label `-1`; the 397 ADL windows carry event label 0. No onset or end timestamp was inferred. The window artifact stores normalized `(x, y, confidence)` features, 17-keypoint validity masks, timestamps, causal track coverage, and source tracking IDs. Its shape is `(655, 30, 51)` with validity shape `(655, 30, 17)`.
+
+The PyTorch interface loaded 494 train and 161 validation samples and produced `(32, 30, 51)` test batches for each split. Subject, sequence, and overlapping-window leakage validation passed. Train subjects are 1, 2, 4, 5, 6, 8; validation subjects are 3 and 7; Subjects 9 and 10 are absent.
+
+### Integrity, reproducibility and readiness
+
+A resume-only run checksum-verified all 78 pose and quality artifacts (`resumed_verified=78`, `failed=0`) and performed zero inference. Independent window generation produced byte-identical 1,852,907-byte NPZ files with SHA-256 `1c7b461b281e401a636165b9c6be8c291b27f4ea1430fc3ec452df15cc2cf364`; all 22 arrays also matched. No `.partial` artifacts remained. Generated data stays outside Git.
+
+The automated suite has 39 passing tests in 0.67 seconds. It now also verifies per-subject window accounting. Compile and diff checks pass.
+
+Phase 3 may use only the 494 train windows for fitting and the 161 validation windows for development evaluation. The 14 pose-quality quarantines and two source-alignment quarantines remain excluded. The dataset is ready for training configuration and baseline design, subject to explicit approval to start Phase 3; it is not evidence of fall-model accuracy, and sealed Subjects 9/10 and GMDCSA-24 must remain untouched.

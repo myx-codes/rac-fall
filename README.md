@@ -2,7 +2,7 @@
 
 **Risk-Adaptive Context-Aware Fall Verification**. This is a reproducible research **starter**, not a trained fall detector or medical/safety product.
 
-**Status:** Research proposal, dataset protocols, reference event-level evaluator, pretrained pose smoke test, and a live tracked pose visualizer are implemented. Fall detection, TCN, scene model, learned RACF, and full experiments are **not implemented**. No fall-detection accuracy claims.
+**Status:** Research proposal, dataset protocols, reference event-level evaluator, pretrained pose tools, a Phase 3A causal Pose-TCN ground-state baseline, and Phase 3B frozen-baseline failure analysis are implemented. Fall-event detection, scene model, learned RACF, and sealed-test experiments are **not implemented**. No fall-event accuracy claims.
 
 ## How to run (macOS Apple Silicon / Python 3.11+)
 
@@ -44,7 +44,7 @@ The live command processes frames only in memory: it does not save raw frames, s
 
 Phase 2B adds strict CAUCAFall-video and URFD-RGB-sequence adapters, provenance manifests, reproducible subject splits, tracked pose extraction, normalization, causal windows, and PyTorch loaders. Raw datasets and generated `.npz` files must remain outside Git. GMDCSA-24 is locked against pose extraction and development use.
 
-Phase 2B.5 downloaded and checksum-verified the approved Subjects 1–8 official PNG/TXT inventory. The full canonical audit then found two official filename-index discontinuities (`Subject.1/Sit down` and `Subject.5/Kneel`), so controlled pose preprocessing stopped before inference. Subjects 9 and 10 remain sealed and absent; Subjects 3 and 5 remain documented as development-exposed. See the Phase 2B report before starting Phase 3.
+Phase 2B.5 downloaded and checksum-verified the approved Subjects 1–8 official PNG/TXT inventory. Two official filename-index discontinuities (`Subject.1/Sit down` and `Subject.5/Kneel`) remain excluded. After explicit approval, the other 78 sequences were processed with YOLO26n-Pose/MPS at `imgsz=416`; strict pose gates accepted 64 sequences and produced 494 train plus 161 validation causal windows. Subjects 9 and 10 remain sealed and absent; Subjects 3 and 5 remain documented as development-exposed. Phase 3A trained a ground-state classifier on these windows, not a fall-event detector.
 
 ```bash
 racfall download-caucafall-canonical --folders-json /external/official-folders.json --metadata-dir /external/official-metadata --dataset-root /external/CAUCAFall --reuse-root /external --report-dir /external/download-report --plan-only
@@ -53,11 +53,13 @@ racfall split-caucafall-trainval-frozen --manifest /external/manifests/canonical
 racfall audit-caucafall-canonical --manifest /external/manifests/canonical-split.csv --dataset-root /external/CAUCAFall --output-dir /external/canonical-audit
 racfall preprocess-caucafall-batch --manifest /external/manifests/train-val-batch.csv --dataset-root /external/CAUCAFall --canonical-audit-dir /external/canonical-audit --output-dir /external/processed --device mps --imgsz 416
 racfall build-pose-sequences --manifest /external/manifests/train-val-batch.csv --pose-dir /external/processed/poses --alignment-dir /external/canonical-audit --quality-dir /external/processed/quality --output /external/windows/train-val.npz
+racfall train-pose-tcn --windows /external/windows/train-val.npz --output-dir /external/phase3a --device mps --seeds 17 29 43
+racfall analyze-phase3b --windows /external/windows/train-val.npz --checkpoint /external/phase3a/checkpoints/causal_tcn-seed-29.pt --output-dir /external/phase3b --device mps
 ```
 
 CAUCAFall frame labels are causal ground-state classification (`1` means on the ground due to a fall), not fall-event onset/end annotations. Missing TXT labels remain `-1` with an invalid mask. Annotation boxes are excluded from inference. Sequence quality reports quarantine unresolved sources/poses before window generation.
 
-See `docs/PHASE_2B_REPORT.md` for the audited source facts, full CLI workflow, schemas, blind-test policy, and unresolved real-data pilot gate. No Phase 3 model training is implemented.
+See `docs/PHASE_2B_REPORT.md` for the audited source facts and preprocessing workflow, then `docs/PHASE_3A_REPORT.md` and `docs/PHASE_3B_REPORT.md` for the frozen development baseline and failure analysis. No fall-event training or sealed-test evaluation is implemented.
 
 ## Research documents
 
@@ -71,6 +73,9 @@ See `docs/PHASE_2B_REPORT.md` for the audited source facts, full CLI workflow, s
 - `docs/SPRINT_01_REPORT.md` — implemented vs not validated.
 - `docs/PHASE_2B_REPORT.md` — dataset audit, preprocessing implementation and pilot gate.
 - `docs/PHASE_2B4_WORKFLOW.md` — canonical PNG/TXT, frozen split, batch/resume and integrity workflow.
+- `docs/PHASE_3A_REPORT.md` — causal TCN/static/majority baseline protocol and real validation results.
+- `docs/PHASE_3B_REPORT.md` — frozen checkpoint registration, validation errors and robustness results.
+- `docs/PHASE_3B_PROTOCOLS.md` — separate ground-state/event protocols and prospective RACF ablations.
 - `docs/FALL_EVENT_ANNOTATION_PROTOCOL.md` — proposed human-review protocol for initiation, contact and recovery landmarks.
 
 ## Evaluation CSV contract
