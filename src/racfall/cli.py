@@ -18,6 +18,14 @@ def main():
     ev.add_argument("--alerts", required=True)
     ev.add_argument("--cooldown-s", type=float, default=10.0)
     ev.add_argument("--match-window-s", type=float, default=5.0)
+    reviewed_ev = command.add_parser(
+        "eval-reviewed-events", help="Evaluate alerts against adjudicated Phase 4C events",
+    )
+    reviewed_ev.add_argument("--manifest", required=True)
+    reviewed_ev.add_argument("--annotations", required=True)
+    reviewed_ev.add_argument("--alerts", required=True)
+    reviewed_ev.add_argument("--cooldown-s", type=float, default=10.0)
+    reviewed_ev.add_argument("--match-window-s", type=float, default=5.0)
     smoke = command.add_parser("pose-smoke", help="Run pretrained pose inference only (no fall decision)")
     smoke.add_argument("--source", required=True, help="MP4 path or webcam index 0")
     smoke.add_argument("--max-frames", type=int, default=50)
@@ -170,6 +178,62 @@ def main():
     phase3b.add_argument("--device", choices=["mps", "cpu"], default="mps")
     phase3b.add_argument("--repeat-inference", type=int, default=20)
     phase3b.add_argument("--robustness-seed", type=int, default=20261108)
+    phase4a = command.add_parser(
+        "verify-phase4a", help="Evaluate preregistered quality-aware verifier variants",
+    )
+    phase4a.add_argument("--windows", required=True)
+    phase4a.add_argument("--checkpoint", required=True)
+    phase4a.add_argument("--frozen-registry", default="configs/phase3b_frozen_baseline.json")
+    phase4a.add_argument("--phase3a-config", default="configs/phase3a_pose_tcn.json")
+    phase4a.add_argument("--verifier-config", default="configs/phase4a_quality_verifier.json")
+    phase4a.add_argument("--output-dir", required=True)
+    phase4a.add_argument("--device", choices=["mps", "cpu"], default="mps")
+    scene_audit = command.add_parser(
+        "audit-scene-context", help="Run the Phase 4B training-only scene feasibility audit",
+    )
+    scene_audit.add_argument("--manifest", required=True)
+    scene_audit.add_argument("--dataset-root", required=True)
+    scene_audit.add_argument("--pose-dir", required=True)
+    scene_audit.add_argument("--weights", required=True)
+    scene_audit.add_argument("--config", default="configs/phase4b_scene_context.json")
+    scene_audit.add_argument("--output-dir", required=True)
+    scene_audit.add_argument("--device", choices=["mps", "cpu"], default="mps")
+    manual_scene = command.add_parser(
+        "validate-scene-audit", help="Validate completed training-only scene annotations",
+    )
+    manual_scene.add_argument("--annotations", required=True)
+    manual_scene.add_argument("--config", default="configs/phase4b_scene_context.json")
+    manual_scene.add_argument("--output")
+    event_pilot = command.add_parser(
+        "prepare-event-pilot", help="Create a training-only Phase 4C annotation queue",
+    )
+    event_pilot.add_argument("--manifest", required=True)
+    event_pilot.add_argument("--dataset-root", required=True)
+    event_pilot.add_argument("--canonical-audit-dir", required=True)
+    event_pilot.add_argument("--output-dir", required=True)
+    event_pilot.add_argument("--reviewer-id", required=True)
+    event_pilot.add_argument("--config", default="configs/phase4c_event_annotation.json")
+    annotate_event = command.add_parser(
+        "annotate-events", help="Open the local frame-by-frame Phase 4C annotation tool",
+    )
+    annotate_event.add_argument("--queue", required=True)
+    annotate_event.add_argument("--annotations", required=True)
+    annotate_event.add_argument("--dataset-root", required=True)
+    annotate_event.add_argument("--video-id", required=True)
+    validate_event = command.add_parser(
+        "validate-event-annotations", help="Validate Phase 4C event landmark decisions",
+    )
+    validate_event.add_argument("--annotations", required=True)
+    validate_event.add_argument("--config", default="configs/phase4c_event_annotation.json")
+    validate_event.add_argument("--output")
+    validate_event.add_argument("--allow-pending", action="store_true")
+    compare_event = command.add_parser(
+        "compare-event-reviews", help="Compute Phase 4C agreement and adjudication queue",
+    )
+    compare_event.add_argument("--reviewer-1", required=True)
+    compare_event.add_argument("--reviewer-2", required=True)
+    compare_event.add_argument("--config", default="configs/phase4c_event_annotation.json")
+    compare_event.add_argument("--output")
     args = parser.parse_args()
     if args.command == "env-check":
         print_diagnostic()
@@ -179,6 +243,17 @@ def main():
         alerts = read_alerts(args.alerts, manifest)
         print(json.dumps(evaluate(manifest, events, alerts, cooldown_s=args.cooldown_s,
                                   match_window_s=args.match_window_s), indent=2))
+    elif args.command == "eval-reviewed-events":
+        from .evaluation.events import read_reviewed_events
+        manifest = read_manifest(args.manifest)
+        events, exclusions = read_reviewed_events(args.annotations, manifest)
+        alerts = read_alerts(args.alerts, manifest)
+        result = evaluate(
+            manifest, events, alerts, cooldown_s=args.cooldown_s,
+            match_window_s=args.match_window_s,
+        )
+        result["annotation_exclusions"] = exclusions
+        print(json.dumps(result, indent=2))
     elif args.command == "pose-smoke":
         from .pose_smoke import pose_smoke
         print(json.dumps(pose_smoke(args.source, args.max_frames, args.device, args.imgsz), indent=2))
@@ -375,6 +450,47 @@ def main():
             robustness_seed=args.robustness_seed,
         )
         print(json.dumps(result, indent=2))
+    elif args.command == "verify-phase4a":
+        from .training.phase4a import run_phase4a
+        result = run_phase4a(
+            args.windows, args.checkpoint, args.frozen_registry, args.phase3a_config,
+            args.verifier_config, args.output_dir, device=args.device,
+        )
+        print(json.dumps(result, indent=2))
+    elif args.command == "audit-scene-context":
+        from .context.scene import audit_training_scene_context
+        from .data.manifest import read_manifest
+        result = audit_training_scene_context(
+            read_manifest(args.manifest), args.dataset_root, args.pose_dir,
+            args.weights, args.config, args.output_dir, device=args.device,
+        )
+        print(json.dumps(result, indent=2))
+    elif args.command == "validate-scene-audit":
+        from .context.scene import validate_manual_scene_audit
+        print(json.dumps(validate_manual_scene_audit(
+            args.annotations, args.config, args.output,
+        ), indent=2))
+    elif args.command == "prepare-event-pilot":
+        from .annotation.events import prepare_pilot
+        from .data.manifest import read_manifest as read_dataset_manifest
+        print(json.dumps(prepare_pilot(
+            read_dataset_manifest(args.manifest), args.dataset_root,
+            args.canonical_audit_dir, args.output_dir, args.config, args.reviewer_id,
+        ), indent=2))
+    elif args.command == "annotate-events":
+        from .annotation.events import annotate_sequence
+        annotate_sequence(args.queue, args.annotations, args.dataset_root, args.video_id)
+    elif args.command == "validate-event-annotations":
+        from .annotation.events import validate_annotations
+        print(json.dumps(validate_annotations(
+            args.annotations, args.config, require_complete=not args.allow_pending,
+            output=args.output,
+        ), indent=2))
+    elif args.command == "compare-event-reviews":
+        from .annotation.events import compare_reviews
+        print(json.dumps(compare_reviews(
+            args.reviewer_1, args.reviewer_2, args.config, args.output,
+        ), indent=2))
 
 
 if __name__ == "__main__":

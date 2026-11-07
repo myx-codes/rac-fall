@@ -2,7 +2,7 @@
 
 **Risk-Adaptive Context-Aware Fall Verification**. This is a reproducible research **starter**, not a trained fall detector or medical/safety product.
 
-**Status:** Research proposal, dataset protocols, reference event-level evaluator, pretrained pose tools, a Phase 3A causal Pose-TCN ground-state baseline, and Phase 3B frozen-baseline failure analysis are implemented. Fall-event detection, scene model, learned RACF, and sealed-test experiments are **not implemented**. No fall-event accuracy claims.
+**Status:** Research proposal, dataset protocols, reference event-level evaluator, pretrained pose tools, a Phase 3A causal Pose-TCN ground-state baseline, Phase 3B frozen-baseline failure analysis, and a deterministic Phase 4A quality-aware verifier are implemented. The Phase 4B scene-context reliability gate failed, so context-aware verification remains disabled. Phase 4C adds a training-only manual event-annotation and review foundation; its pilot boundaries remain pending independent human review. Fall-event detection, learned RACF, and sealed-test experiments are **not implemented**. No fall-event accuracy claims.
 
 ## How to run (macOS Apple Silicon / Python 3.11+)
 
@@ -55,6 +55,13 @@ racfall preprocess-caucafall-batch --manifest /external/manifests/train-val-batc
 racfall build-pose-sequences --manifest /external/manifests/train-val-batch.csv --pose-dir /external/processed/poses --alignment-dir /external/canonical-audit --quality-dir /external/processed/quality --output /external/windows/train-val.npz
 racfall train-pose-tcn --windows /external/windows/train-val.npz --output-dir /external/phase3a --device mps --seeds 17 29 43
 racfall analyze-phase3b --windows /external/windows/train-val.npz --checkpoint /external/phase3a/checkpoints/causal_tcn-seed-29.pt --output-dir /external/phase3b --device mps
+racfall verify-phase4a --windows /external/windows/train-val.npz --checkpoint /external/phase3a/checkpoints/causal_tcn-seed-29.pt --output-dir /external/phase4a --device mps
+racfall audit-scene-context --manifest /external/manifests/train-val-batch.csv --dataset-root /external/CAUCAFall --pose-dir /external/processed/poses --weights /external/models/yolo26n.pt --output-dir /external/phase4b/training-scene-audit --config configs/phase4b_scene_context.json --device mps
+racfall validate-scene-audit --annotations /external/phase4b/training-scene-audit/manual-audit.csv --config configs/phase4b_scene_context.json --output /external/phase4b/training-scene-audit/manual-validation.json
+racfall prepare-event-pilot --manifest /external/manifests/trainval.csv --dataset-root /external/CAUCAFall --canonical-audit-dir /external/canonical-audit --output-dir /external/phase4c/pilot --reviewer-id reviewer-1
+racfall annotate-events --queue /external/phase4c/pilot/pilot-queue.json --annotations /external/phase4c/pilot/annotations-reviewer-1.csv --dataset-root /external/CAUCAFall --video-id caucafall-Subject.2-Fall-forward-png
+racfall validate-event-annotations --annotations /external/phase4c/pilot/annotations-reviewer-1.csv
+racfall compare-event-reviews --reviewer-1 /external/phase4c/pilot/annotations-reviewer-1.csv --reviewer-2 /external/phase4c/pilot/annotations-reviewer-2.csv --output /external/phase4c/pilot/agreement.json
 ```
 
 CAUCAFall frame labels are causal ground-state classification (`1` means on the ground due to a fall), not fall-event onset/end annotations. Missing TXT labels remain `-1` with an invalid mask. Annotation boxes are excluded from inference. Sequence quality reports quarantine unresolved sources/poses before window generation.
@@ -76,6 +83,9 @@ See `docs/PHASE_2B_REPORT.md` for the audited source facts and preprocessing wor
 - `docs/PHASE_3A_REPORT.md` — causal TCN/static/majority baseline protocol and real validation results.
 - `docs/PHASE_3B_REPORT.md` — frozen checkpoint registration, validation errors and robustness results.
 - `docs/PHASE_3B_PROTOCOLS.md` — separate ground-state/event protocols and prospective RACF ablations.
+- `docs/PHASE_4A_REPORT.md` — preregistered deterministic verification, abstention and trade-off results.
+- `docs/PHASE_4B_REPORT.md` — training-only scene-context feasibility audit and stop-gate result.
+- `docs/PHASE_4C_REPORT.md` — event-annotation pilot foundation, agreement support and evaluator verification.
 - `docs/FALL_EVENT_ANNOTATION_PROTOCOL.md` — proposed human-review protocol for initiation, contact and recovery landmarks.
 
 ## Evaluation CSV contract

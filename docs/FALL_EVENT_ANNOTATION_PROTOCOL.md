@@ -1,6 +1,6 @@
 # CAUCAFall True Fall-Event Annotation Protocol
 
-Status: proposed Phase 2B.2 protocol; no event timestamps have been created
+Status: Phase 4C executable training-only pilot protocol; no reviewed event timestamps have been created
 
 ## Purpose and separation from source labels
 
@@ -12,30 +12,34 @@ Annotators record zero-based decoded-frame indices and the corresponding `frame_
 
 - `fall_initiation`: earliest visible frame of involuntary loss of balance that continues into this fall. Ordinary bending, sitting, kneeling, or a recoverable balance correction is not initiation.
 - `ground_contact`: earliest visible frame at which a body part other than a normally supporting foot makes fall-related contact with the floor or another terminal support surface. Record the contacted body region separately.
+- `settled_ground_state`: earliest visible frame after contact at which major fall-related body motion has ceased and the person is stably in the post-fall ground state. Impact bounce or continuing collapse is not settled state.
 - `recovery_start`: earliest visible frame of an intentional attempt to leave the post-fall ground state. Passive motion after impact is not recovery.
 - `recovery_end`: earliest visible frame at which the subject has reached a stable non-ground posture. Leave unknown if the clip ends first.
 
-Each landmark is either an exact frame or `-1` (unknown). Occlusion, an event already in progress at clip start, an event continuing after clip end, ambiguous voluntary motion, and decode/annotation misalignment are explicit reason codes; annotators must not estimate a hidden timestamp.
+Each landmark has a status: `exact`, `unknown`, `ambiguous`, or `not_applicable`. Only `exact` uses a zero-based frame; every other status uses `-1`. Occlusion, an event already in progress at clip start, an event continuing after clip end, ambiguous voluntary motion, and decode/annotation misalignment are explicit reason codes; annotators must not estimate a hidden timestamp.
 
 ## Review workflow
 
-1. Use only a sequence whose AVI-to-source-frame alignment provenance is verified. Quarantined sequences cannot receive event timestamps.
-2. Present decoded frames with verified frame number and timestamp. Source ground-state labels may be shown in a separate lane, clearly marked as non-event evidence.
-3. Two reviewers independently mark all four landmarks and confidence (`high`, `medium`, `low`) without seeing the other review.
+1. Use only a sequence whose canonical source inventory and timing provenance are verified. Quarantined sequences cannot receive event timestamps.
+2. Present canonical PNGs with zero-based ordinal, official source index and proxy timestamp. The Phase 4C tool intentionally does not show source ground-state labels, preventing their transition from becoming an onset cue.
+3. Two reviewers independently mark all five landmarks and confidence (`high`, `medium`, `low`) without seeing the other review.
 4. Exact agreement is preferred. Any disagreement greater than two decoded frames, any unknown/known disagreement, or any disagreement in event validity requires adjudication by a third reviewer.
-5. The adjudicator records the selected frame, rationale, reviewer IDs, tool version, source AVI SHA-256, alignment JSON SHA-256, and annotation revision. Original reviewer rows remain immutable.
-6. Run schema, temporal-order, bounds, checksum, and subject-split validation before release. Required order is `fall_initiation <= ground_contact <= recovery_start <= recovery_end` for the subset of known landmarks.
+5. The adjudicator records the selected frame, rationale, reviewer IDs, tool version, canonical source SHA-256, audit JSON SHA-256, and annotation revision. Original reviewer rows remain immutable.
+6. Run schema, temporal-order, bounds, checksum, and subject-split validation before release. Required order is `fall_initiation <= ground_contact <= settled_ground_state <= recovery_start <= recovery_end` for the subset of exact landmarks.
+7. Frame timestamps are derived as `zero_based_frame / fps_proxy`; they are never typed by a reviewer. Record half-frame quantization uncertainty separately. If PNG timing uses an AVI or configured FPS proxy, the unknown systematic PNG/AVI offset remains explicit and is not folded into a fabricated numeric error bound.
 
 ## Proposed CSV contract
 
 ```text
 dataset,video_id,subject_id,source_sha256,alignment_sha256,
-fall_initiation_frame,ground_contact_frame,recovery_start_frame,recovery_end_frame,
-contact_region,event_valid,unknown_reason,reviewer_id,review_round,confidence,
-annotation_tool_version,created_at_utc,provenance_note
+fall_initiation_frame,fall_initiation_status,ground_contact_frame,ground_contact_status,
+settled_ground_state_frame,settled_ground_state_status,recovery_start_frame,recovery_start_status,
+recovery_end_frame,recovery_end_status,contact_region,event_valid,unknown_reason,
+reviewer_id,review_round,annotation_confidence,annotation_tool_version,created_at_utc,
+fps_proxy,fps_provenance,fps_uncertainty_s,provenance_note
 ```
 
-`event_valid` is `1`, `0`, or `-1` for valid fall, reviewed non-fall, or unresolved. Missing landmarks use integer `-1`; blank strings are not allowed. Timestamps are derived during validation from the verified frame indices and container FPS, not typed independently.
+`event_valid` is `1`, `0`, or `-1` for valid fall, reviewed non-fall, or unresolved. A reviewed non-fall uses `not_applicable` for every landmark. Timestamps are derived during validation from verified frame indices and the recorded FPS proxy, not typed independently.
 
 ## Causal use and split policy
 

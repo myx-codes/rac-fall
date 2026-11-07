@@ -1,0 +1,63 @@
+{
+  "schema_version": "racfall.phase4a-config.v1",
+  "status": "preregistered_before_phase4a_validation_run",
+  "protocol_date": "2026-11-08",
+  "task": "causal ground-state endpoint verification; not fall-event detection",
+  "frozen_baseline_id": "phase3a-causal-tcn-seed29-epoch6",
+  "candidate_threshold": 0.5,
+  "release_threshold": 0.35,
+  "cooldown_windows": 2,
+  "expected_stride_frames": 15,
+  "quality_gate": {
+    "minimum_track_coverage": 0.75,
+    "maximum_missing_keypoint_rate": 0.4,
+    "minimum_mean_visible_confidence": 0.65,
+    "maximum_fully_missing_frames": 7,
+    "maximum_track_switches": 2
+  },
+  "quality_score_weights": {
+    "track_coverage": 0.3,
+    "observed_keypoint_fraction": 0.3,
+    "mean_visible_confidence": 0.2,
+    "identity_continuity": 0.2
+  },
+  "variants": {
+    "frozen_tcn": {
+      "confirmation_windows": 1,
+      "quality_policy": "comparison_only"
+    },
+    "fixed_verification": {
+      "confirmation_windows": 2,
+      "quality_policy": "uncertain_if_low_quality_and_below_candidate"
+    },
+    "quality_aware_verification": {
+      "confirmation_windows": 2,
+      "quality_policy": "always_uncertain_when_low_quality"
+    },
+    "risk_adaptive_verification": {
+      "quality_policy": "always_uncertain_when_low_quality",
+      "risk_weights": {
+        "tcn_probability": 0.65,
+        "positive_probability_trend": 0.15,
+        "movement_velocity": 0.2
+      },
+      "trend_scale": 0.25,
+      "velocity_scale": 0.2,
+      "high_risk_threshold": 0.8,
+      "standard_risk_threshold": 0.6,
+      "high_quality_threshold": 0.85,
+      "confirmation_windows": {
+        "high_risk_high_quality": 1,
+        "standard_risk": 2,
+        "borderline_risk": 3
+      }
+    }
+  },
+  "evaluation": {
+    "validation_subjects": ["Subject.3", "Subject.7"],
+    "sealed_subjects": ["Subject.9", "Subject.10"],
+    "uncertain_policy": "report all-sample alert metrics, strict abstention-as-error metrics, and conditional non-abstained metrics",
+    "delay_unit": "causal windows",
+    "event_metrics_prohibited": true
+  }
+}

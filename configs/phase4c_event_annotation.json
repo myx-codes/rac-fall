@@ -1,0 +1,47 @@
+{
+  "schema_version": "racfall.phase4c-config.v1",
+  "status": "frozen_before_training_only_pilot",
+  "protocol_date": "2026-11-08",
+  "task": "manual fall-event landmark annotation; separate from source ground-state labels",
+  "allowed_subjects": ["Subject.1", "Subject.2", "Subject.4", "Subject.5", "Subject.6", "Subject.8"],
+  "forbidden_subjects": ["Subject.3", "Subject.7", "Subject.9", "Subject.10"],
+  "pilot_sequences": [
+    ["Subject.2", "Fall forward"],
+    ["Subject.4", "Fall backwards"],
+    ["Subject.6", "Fall sitting"],
+    ["Subject.2", "Sit down"],
+    ["Subject.4", "Walk"],
+    ["Subject.6", "Kneel"]
+  ],
+  "landmarks": [
+    "fall_initiation",
+    "ground_contact",
+    "settled_ground_state",
+    "recovery_start",
+    "recovery_end"
+  ],
+  "review": {
+    "independent_reviewers_required": 2,
+    "frame_tolerance_for_agreement": 2,
+    "adjudicate_known_unknown_disagreement": true,
+    "adjudicate_event_validity_disagreement": true
+  },
+  "timing": {
+    "timestamp_formula": "zero_based_frame / fps_proxy",
+    "fps_proxy": 20.0,
+    "quantization_uncertainty_frames": 0.5,
+    "systematic_png_avi_offset": "unknown; PNG and AVI indices must not be assumed equivalent"
+  },
+  "evaluation": {
+    "cooldown_s": 10.0,
+    "match_window_s": 5.0,
+    "matching": "first unmatched retained alert in [fall_initiation, fall_initiation + match_window]",
+    "ambiguous_event_policy": "exclude from metrics and report count"
+  },
+  "safety": {
+    "ground_state_transition_as_onset": false,
+    "raw_image_retention": "none",
+    "annotation_artifacts": "outside_git",
+    "gmdcsa24_locked": true
+  }
+}

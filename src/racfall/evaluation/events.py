@@ -29,6 +29,7 @@ class FallEvent:
     event_id: str
     onset_s: float
     end_s: float
+    ground_contact_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,75 @@ def read_events(path: str | Path, videos: dict[str, Video]) -> list[FallEvent]:
     return result
 
 
+def read_reviewed_events(
+    path: str | Path, videos: dict[str, Video], *, require_adjudicated: bool = True,
+) -> tuple[list[FallEvent], dict]:
+    """Read Phase 4C decisions without converting unknown boundaries into events."""
+    required = {
+        "video_id", "event_id", "event_valid", "review_status", "frame_count",
+        "fps_proxy", "fall_initiation_frame", "fall_initiation_status",
+        "ground_contact_frame", "ground_contact_status",
+        "recovery_end_frame", "recovery_end_status",
+        "fps_uncertainty_s", "provenance_note",
+    }
+    events: list[FallEvent] = []
+    excluded_ambiguous = excluded_unreviewed = reviewed_non_fall = 0
+    seen = set()
+    timing_uncertainties = []
+    systematic_uncertainties = set()
+    for row in _rows(path, required):
+        vid = row["video_id"]
+        if vid not in videos:
+            raise ValueError(f"Unknown reviewed-event video {vid}")
+        key = (vid, row["event_id"])
+        if key in seen:
+            raise ValueError(f"Duplicate reviewed event key {key}")
+        seen.add(key)
+        if require_adjudicated and row["review_status"] != "adjudicated":
+            excluded_unreviewed += 1
+            continue
+        if row["event_valid"] == "0":
+            reviewed_non_fall += 1
+            continue
+        if row["event_valid"] == "-1" or row["fall_initiation_status"] != "exact":
+            excluded_ambiguous += 1
+            continue
+        if row["event_valid"] != "1":
+            raise ValueError(f"Invalid event_valid for {vid}")
+        fps = _float(row["fps_proxy"], "fps_proxy")
+        timing_uncertainty = _float(row["fps_uncertainty_s"], "fps_uncertainty_s")
+        if timing_uncertainty < 0:
+            raise ValueError(f"Invalid FPS uncertainty for {vid}")
+        timing_uncertainties.append(timing_uncertainty)
+        systematic_uncertainties.add(row["provenance_note"])
+        frame_count = int(row["frame_count"])
+        onset_frame = int(row["fall_initiation_frame"])
+        if fps <= 0 or frame_count <= 0 or not 0 <= onset_frame < frame_count:
+            raise ValueError(f"Invalid frame timing for {vid}")
+        onset = onset_frame / fps
+        if row["recovery_end_status"] == "exact":
+            end = int(row["recovery_end_frame"]) / fps
+        else:
+            end = videos[vid].duration_s
+        contact = (
+            int(row["ground_contact_frame"]) / fps
+            if row["ground_contact_status"] == "exact" else None
+        )
+        if onset > end or end > videos[vid].duration_s or (contact is not None and contact < onset):
+            raise ValueError(f"Invalid reviewed event ordering for {vid}")
+        events.append(FallEvent(vid, row["event_id"], onset, end, contact))
+    return events, {
+        "accepted_events": len(events),
+        "excluded_ambiguous_events": excluded_ambiguous,
+        "excluded_unreviewed_rows": excluded_unreviewed,
+        "reviewed_non_fall_rows": reviewed_non_fall,
+        "maximum_timestamp_quantization_uncertainty_s": (
+            max(timing_uncertainties) if timing_uncertainties else None
+        ),
+        "timestamp_systematic_uncertainty": sorted(systematic_uncertainties),
+    }
+
+
 def read_alerts(path: str | Path, videos: dict[str, Video]) -> list[Alert]:
     result = []
     for row in _rows(path, {"video_id", "alert_s"}):
@@ -154,7 +224,9 @@ def evaluate(
 
     used: set[tuple[str, int]] = set()
     delays: list[float] = []
+    contact_delays: list[float] = []
     matched_events: list[str] = []
+    matched_pairs: list[dict] = []
     for event in sorted(events, key=lambda e: (e.video_id, e.onset_s, e.event_id)):
         available = retained.get(event.video_id, [])
         for i, alert in enumerate(available):
@@ -163,7 +235,18 @@ def evaluate(
             if event.onset_s <= alert.alert_s <= event.onset_s + match_window_s:
                 used.add((event.video_id, i))
                 delays.append(alert.alert_s - event.onset_s)
+                if event.ground_contact_s is not None:
+                    contact_delays.append(alert.alert_s - event.ground_contact_s)
                 matched_events.append(f"{event.video_id}:{event.event_id}")
+                matched_pairs.append({
+                    "video_id": event.video_id, "event_id": event.event_id,
+                    "alert_s": alert.alert_s,
+                    "initiation_delay_s": alert.alert_s - event.onset_s,
+                    "ground_contact_delay_s": (
+                        alert.alert_s - event.ground_contact_s
+                        if event.ground_contact_s is not None else None
+                    ),
+                })
                 break
 
     tp = len(matched_events)
@@ -179,10 +262,17 @@ def evaluate(
         "tp": tp, "fp_all_unmatched": fp, "fn": fn,
         "event_precision": precision, "event_recall": recall, "event_f1": f1,
         "median_detection_delay_s": statistics.median(delays) if delays else None,
+        "median_ground_contact_delay_s": statistics.median(contact_delays) if contact_delays else None,
         "adl_false_alerts": adl_alerts,
         "adl_exposure_hours": negative_duration_s / 3600,
         "false_alarms_per_adl_hour": adl_alerts / (negative_duration_s / 3600) if negative_duration_s > 0 else None,
         "retained_alerts": retained_count,
+        "suppressed_duplicate_alerts": len(alerts) - retained_count,
         "total_ground_truth_events": len(events),
+        "matched_pairs": matched_pairs,
+        "unmatched_events": [
+            f"{event.video_id}:{event.event_id}" for event in events
+            if f"{event.video_id}:{event.event_id}" not in set(matched_events)
+        ],
         "policy": {"cooldown_s": cooldown_s, "match_window_s": match_window_s, "matching": "causal_onset_to_onset_plus_window"},
     }

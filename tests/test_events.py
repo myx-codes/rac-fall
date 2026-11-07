@@ -43,6 +43,7 @@ def test_explicit_adl_exposure_denominator_and_refractory():
     assert r["adl_false_alerts"] == 2
     assert r["false_alarms_per_adl_hour"] == 4
     assert r["event_recall"] is None
+    assert r["suppressed_duplicate_alerts"] == 1
 
 
 def test_boundary_and_invalid_window():
@@ -51,6 +52,23 @@ def test_boundary_and_invalid_window():
     assert r["tp"] == 1
     with pytest.raises(ValueError):
         evaluate({"v": v}, [], [], match_window_s=-0.5)
+
+
+def test_late_alert_and_missed_fall_are_reported_not_rescued():
+    v = video()
+    r = evaluate({"v": v}, [FallEvent("v", "f", 10, 20)], [Alert("v", 15.01)])
+    assert r["tp"] == 0 and r["fn"] == 1
+    assert r["unmatched_events"] == ["v:f"]
+    assert r["fp_all_unmatched"] == 1
+
+
+def test_ground_contact_delay_can_be_negative_and_is_not_clipped():
+    v = video()
+    event = FallEvent("v", "f", 10, 20, ground_contact_s=12)
+    r = evaluate({"v": v}, [event], [Alert("v", 11)])
+    assert r["median_detection_delay_s"] == 1
+    assert r["median_ground_contact_delay_s"] == -1
+    assert r["matched_pairs"][0]["ground_contact_delay_s"] == -1
 
 
 def test_manifest_detects_subject_leakage(tmp_path):

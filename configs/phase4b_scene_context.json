@@ -1,0 +1,57 @@
+{
+  "schema_version": "racfall.phase4b-config.v1",
+  "status": "preregistered_before_training_only_scene_audit",
+  "protocol_date": "2026-11-08",
+  "task": "inference-safe scene-context feasibility and ground-state verification; not event detection",
+  "detector": {
+    "name": "Ultralytics YOLO26n Detect",
+    "weights_filename": "yolo26n.pt",
+    "weights_sha256": "9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef",
+    "pretraining": "Objects365 then COCO; official Ultralytics checkpoint",
+    "imgsz": 416,
+    "confidence_threshold": 0.25,
+    "classes": {"chair": 56, "couch": 57, "bed": 59},
+    "software_license": "Ultralytics package metadata: AGPL-3.0; commercial use requires separate licensing review"
+  },
+  "dataset_license": "CAUCAFall v5 official Mendeley record: CC BY 4.0",
+  "training_only_audit": {
+    "subjects": ["Subject.2", "Subject.4", "Subject.5", "Subject.6", "Subject.8"],
+    "actions": ["Sit down", "Fall sitting"],
+    "frames_per_sequence": 8,
+    "manual_frames_per_sequence": 2,
+    "sample_method": "evenly spaced canonical zero-based ordinals including interior activity",
+    "minimum_target_pose_availability": 0.75,
+    "minimum_manual_object_precision": 0.8,
+    "minimum_manual_object_recall": 0.6,
+    "minimum_relation_plausibility": 0.8,
+    "minimum_sequences_with_persistent_context": 0.5,
+    "persistence_minimum_frame_fraction": 0.5,
+    "manual_review_required": true
+  },
+  "relationships": {
+    "near_edge_distance_ratio": 0.15,
+    "overlap_iou_threshold": 0.05,
+    "minimum_context_frame_fraction": 0.5,
+    "maximum_relative_proximity_change": 0.25
+  },
+  "safety": {
+    "object_presence_alone_is_safe": false,
+    "missing_object_policy": "unknown_or_absent; fall back to context-free verifier",
+    "missing_target_policy": "UNCERTAIN",
+    "raw_image_retention": "none by default",
+    "ground_truth_boxes_in_inference": false,
+    "validation_labels_in_configuration": false
+  },
+  "prospective_ablation": {
+    "variants": [
+      "frozen_tcn",
+      "phase4a_risk_adaptive_context_free",
+      "context_spatial_relationship",
+      "context_temporal_relationship"
+    ],
+    "context_action": "extend CANDIDATE confirmation by one window; never force NORMAL",
+    "maximum_confirmation_extension_windows": 1,
+    "high_probability_bypass": 0.9
+  },
+  "sealed_subjects": ["Subject.9", "Subject.10"]
+}
